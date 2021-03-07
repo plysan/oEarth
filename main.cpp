@@ -82,9 +82,7 @@ private:
         createInfo.ppEnabledExtensionNames = requiredExtensions.data();
 
         if (enableValidationLayers) {
-            if (!checkValidationLayerSupport()) {
-                throw std::runtime_error("validation layers requested, but not available!");
-            }
+            checkValidationLayerSupport();
             createInfo.enabledLayerCount = static_cast<uint32_t>(requiredValidationLayers.size());
             createInfo.ppEnabledLayerNames = requiredValidationLayers.data();
             VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = createDebugMessengerCreateInfo();
@@ -140,7 +138,7 @@ private:
         return requiredExtensions;
     }
     
-    bool checkValidationLayerSupport() {
+    void checkValidationLayerSupport() {
         uint32_t layerCount;
         vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
         std::vector<VkLayerProperties> availableLayers(layerCount);
@@ -154,10 +152,9 @@ private:
                 }
             }
             if (!layerFound) {
-                return false;
+                throw std::runtime_error(std::string("Required validation layers not available: ") + layerName);
             }
         }
-        return true;
     }
 
     VkDebugUtilsMessengerCreateInfoEXT createDebugMessengerCreateInfo() {
