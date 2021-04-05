@@ -12,6 +12,12 @@
 #include <set>
 
 
+struct SwapChainSupportDetails {
+    VkSurfaceCapabilitiesKHR capabilities;
+    std::vector<VkSurfaceFormatKHR> formats;
+    std::vector<VkPresentModeKHR> presentModes;
+};
+
 class HelloTriangleApplication {
 
     const uint32_t WIDTH = 800;
@@ -63,8 +69,6 @@ private:
     VkPhysicalDevice phyDevice = VK_NULL_HANDLE;
     VkPhysicalDeviceFeatures phyDevFeatures{};
     int phyDevGraphFamilyIdx = -1, phyDevPresentFamilyIdx = -1;
-    std::vector<VkSurfaceFormatKHR> phyDevSurfaceFormats;
-    std::vector<VkPresentModeKHR> phyDevSurPresentModes;
     VkSurfaceCapabilitiesKHR phyDevSurCapabilities;
     VkQueue graphicsQueue;
     VkQueue presentQueue;
@@ -76,12 +80,15 @@ private:
     std::vector<VkFence> inFlightFences;
     std::vector<VkFence> imagesInFlight;
     size_t currentFrame = 0;
+    bool framebufferResized = false;
 
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        //glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
 
     void initVulkan() {
@@ -100,6 +107,23 @@ private:
         createSyncObjects();
     }
 
+    void recreateSwapChain() {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+        vkDeviceWaitIdle(logicalDevice);
+        cleanupSwapChain();
+        createSwapChain();
+        createImageViews();
+        createRenderPass();
+        createGraphicsPipeline();
+        createFramebuffers();
+        createCommandBuffers();
+    }
+
     void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
@@ -108,16 +132,11 @@ private:
         vkDeviceWaitIdle(logicalDevice);
     }
 
-    void cleanup() {
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
-            vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
-            vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
-        }
-        vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+    void cleanupSwapChain() {
         for (auto framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
         }
+        vkFreeCommandBuffers(logicalDevice, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
         vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
         vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
@@ -125,6 +144,16 @@ private:
             vkDestroyImageView(logicalDevice, imageView, nullptr);
         }
         vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
+    }
+
+    void cleanup() {
+        cleanupSwapChain();
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
+            vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
+            vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
+        }
+        vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
         vkDestroyDevice(logicalDevice, nullptr);
         if (enableValidationLayers) {
             DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
@@ -133,6 +162,24 @@ private:
         vkDestroyInstance(instance, nullptr);
         glfwDestroyWindow(window);
         glfwTerminate();
+    }
+
+    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) {
+        SwapChainSupportDetails details;
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+        uint32_t formatCount;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
+        if (formatCount != 0) {
+            details.formats.resize(formatCount);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
+        }
+        uint32_t presentModeCount;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
+        if (presentModeCount != 0) {
+            details.presentModes.resize(presentModeCount);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
+        }
+        return details;
     }
 
     void createInstance() {
@@ -321,25 +368,6 @@ private:
         }
 
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(lPhysicalDevice, surface, &phyDevSurCapabilities);
-        uint32_t formatCount;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(lPhysicalDevice, surface, &formatCount, nullptr);
-        if (formatCount == 0) {
-            std::cout << "Device: " << deviceProperties.deviceName << " don't have surface format." << '\n';
-            return false;
-        } else {
-            phyDevSurfaceFormats.resize(formatCount);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(lPhysicalDevice, surface, &formatCount, phyDevSurfaceFormats.data());
-        }
-        uint32_t presentModeCount;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(lPhysicalDevice, surface, &presentModeCount, nullptr);
-        if (presentModeCount == 0) {
-            std::cout << "Device: " << deviceProperties.deviceName << " don't have surface present mode." << '\n';
-            return false;
-        } else {
-            phyDevSurPresentModes.resize(presentModeCount);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(lPhysicalDevice, surface, &presentModeCount, phyDevSurPresentModes.data());
-        }
-
 
         uint32_t queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(lPhysicalDevice, &queueFamilyCount, nullptr);
@@ -413,17 +441,17 @@ private:
         }
     }
 
-    VkSurfaceFormatKHR chooseSwapSurfaceFormat() {
-        for (const auto& availableFormat : phyDevSurfaceFormats) {
+    VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+        for (const auto& availableFormat : availableFormats) {
             if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return availableFormat;
             }
         }
-        return phyDevSurfaceFormats[0];
+        return availableFormats[0];
     }
 
-    VkPresentModeKHR chooseSwapPresentMode() {
-        for (const auto& availablePresentMode : phyDevSurPresentModes) {
+    VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
+        for (const auto& availablePresentMode : availablePresentModes) {
             if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
                 return availablePresentMode;
             }
@@ -431,22 +459,23 @@ private:
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
-    VkExtent2D chooseSwapExtent() {
-        if (phyDevSurCapabilities.currentExtent.width != UINT32_MAX) {
-            return phyDevSurCapabilities.currentExtent;
+    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
+        if (capabilities.currentExtent.width != UINT32_MAX) {
+            return capabilities.currentExtent;
         } else {
             int fbWidth, fbHeight;
             glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
             VkExtent2D actualExtent;
-            actualExtent.width = std::max(phyDevSurCapabilities.minImageExtent.width, std::min(phyDevSurCapabilities.maxImageExtent.width, (uint32_t)fbWidth));
-            actualExtent.height = std::max(phyDevSurCapabilities.minImageExtent.height, std::min(phyDevSurCapabilities.maxImageExtent.height, (uint32_t)fbHeight));
+            actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, (uint32_t)fbWidth));
+            actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, (uint32_t)fbHeight));
             return actualExtent;
         }
     }
 
     void createSwapChain() {
-        VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat();
-        VkExtent2D extent = chooseSwapExtent();
+        SwapChainSupportDetails swapChainSupport = querySwapChainSupport(phyDevice);
+        VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
+        VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
         uint32_t imageCount = phyDevSurCapabilities.minImageCount + 1;
         if (phyDevSurCapabilities.maxImageCount > 0 && imageCount > phyDevSurCapabilities.maxImageCount) {
             imageCount = phyDevSurCapabilities.maxImageCount;
@@ -472,7 +501,7 @@ private:
         }
         createInfo.preTransform = phyDevSurCapabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        createInfo.presentMode = chooseSwapPresentMode();
+        createInfo.presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
         createInfo.clipped = VK_TRUE;
         createInfo.oldSwapchain = VK_NULL_HANDLE;
         if (vkCreateSwapchainKHR(logicalDevice, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
@@ -492,8 +521,7 @@ private:
             createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             createInfo.image = swapChainImages[i];
             createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat();
-            createInfo.format = surfaceFormat.format;
+            createInfo.format = swapChainImageFormat;
             createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
             createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
             createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -776,7 +804,13 @@ private:
     void drawFrame() {
         vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapChain();
+            return;
+        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
         // Check if a previous frame is using this image (i.e. there is its fence to wait on)
         if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
             vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
@@ -811,7 +845,13 @@ private:
         presentInfo.pSwapchains = swapChains;
         presentInfo.pImageIndices = &imageIndex;
         presentInfo.pResults = nullptr; // Optional
-        vkQueuePresentKHR(presentQueue, &presentInfo);
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+            framebufferResized = false;
+            recreateSwapChain();
+        } else if (result != VK_SUCCESS) {
+            throw std::runtime_error("failed to present swap chain image!");
+        }
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         vkQueueWaitIdle(presentQueue);
     }
@@ -847,6 +887,11 @@ private:
         file.read(buffer.data(), fileSize);
         file.close();
         return buffer;
+    }
+
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
     }
 };
 
