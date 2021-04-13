@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <vector>
+#include <array>
 #include <cstring>
 #include <iomanip>
 #include <cstdint>

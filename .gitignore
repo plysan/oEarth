@@ -1,6 +1,7 @@
 tags
 cscope.out
 VKDemo
-extlibs
+extlibs/
+textures/
 *.spv
 *.jpg
