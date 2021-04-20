@@ -1,23 +1,25 @@
 .DEFAULT_GOAL := compile
 
-CFLAGS = -std=c++17 -O2
+CC = g++
+CXXFLAGS = -std=c++17 -O2
 LDFLAGS = -lglfw -lvulkan -ldl -lpthread
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
 LDFLAGS += -lX11 -lXxf86vm -lXrandr -lXi
 endif
 
+SHADER := $(filter-out %.spv,$(wildcard shader.*))
+SPV := $(patsubst %,%.spv,$(SHADER))
+SRC := $(wildcard *.cpp)
+OBJ := $(patsubst %.cpp,%.o,$(SRC))
+DEP := $(patsubst %.cpp,%.d,$(SRC))
+PROG := $(patsubst %.cpp,%,$(SRC))
+
 DIR_EXT_LIBS := extlibs
 DIR_TEXTURES := textures
 
-VKDemo: main.cpp $(DIR_EXT_LIBS)/stb_image.h
-	g++ $(CFLAGS) -o VKDemo main.cpp -I$(DIR_EXT_LIBS) $(LDFLAGS)
-
-shader.vert.spv: shader.vert
-	glslc shader.vert -o shader.vert.spv
-
-shader.frag.spv: shader.frag
-	glslc shader.frag -o shader.frag.spv
+%.spv: %
+	glslc $< -o $@
 
 $(DIR_EXT_LIBS)/stb_image.h:
 	wget https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -P $(DIR_EXT_LIBS)
@@ -27,12 +29,32 @@ $(DIR_TEXTURES)/texture.jpg:
 	wget https://vulkan-tutorial.com/images/texture.jpg -P $(DIR_TEXTURES)
 	touch $@
 
-compile: VKDemo shader.vert.spv shader.frag.spv
+compile_main: $(DEP) $(DIR_EXT_LIBS)/stb_image.h
+	@$(MAKE) $(PROG)
+
+ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
+-include $(DEP)
+endif
+
+%.d: %.cpp
+	@$(CC) -MM $(CXXFLAGS) $< | sed 's/\($*\)\.o[ :]*/\1.o $@ : /g' > $@
+
+%: %.d
+
+compile: compile_main index $(SPV)
 
 test: compile $(DIR_TEXTURES)/texture.jpg
-	./VKDemo
+	./main
 
 clean:
-	rm -f VKDemo shader.vert.spv shader.frag.spv
+	@$(RM) $(DEP) $(OBJ) $(PROG) $(SPV) cscope.out tags
 
-.PHONY: compile test clean
+index: cscope.out tags
+
+cscope.out: $(SRC) $(DEP)
+	cscope -bR
+
+tags: $(SRC) $(DEP)
+	ctags -R
+
+.PHONY: compile compile_main test clean index
