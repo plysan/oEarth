@@ -37,7 +37,7 @@ ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
 endif
 
 %.d: %.cpp
-	@$(CC) -MM $(CXXFLAGS) $< | sed 's/\($*\)\.o[ :]*/\1.o $@ : /g' > $@
+	@$(CC) -MM -MG $(CXXFLAGS) $< | sed 's/\($*\)\.o[ :]*/\1.o $@ : /g' > $@
 
 %: %.d
 
