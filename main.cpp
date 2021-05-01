@@ -26,11 +26,6 @@
 #include "libs/tetrahedral_globe.h"
 
 
-const std::vector<uint16_t> indices = {
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
-};
-
 struct UniformBufferObject {
     glm::mat4 model;
     glm::mat4 view;
@@ -121,6 +116,7 @@ private:
     size_t currentFrame = 0;
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
+    int indicesCount;
 
     void initWindow() {
         glfwInit();
@@ -939,6 +935,7 @@ private:
         std::vector<Vertex> vertices;
         std::vector<uint16_t> indices;
         genTetrahedralGlobe(vertices, indices, 0.0, 0.0, 0.0);
+        indicesCount = indices.size();
 
         VkDeviceSize vertBufferSize = sizeof(vertices[0]) * vertices.size();
         VkBuffer vertStagingBuffer;
@@ -1126,7 +1123,7 @@ private:
             vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
             vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
-            vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+            vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indicesCount), 1, 0, 0, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
             if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
