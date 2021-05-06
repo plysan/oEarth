@@ -117,6 +117,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
     int indicesCount;
+    int verticesCount;
 
     void initWindow() {
         glfwInit();
@@ -936,6 +937,7 @@ private:
         std::vector<uint16_t> indices;
         genTetrahedralGlobe(vertices, indices, 0.0, 0.0, 0.0);
         indicesCount = indices.size();
+        verticesCount = vertices.size();
 
         VkDeviceSize vertBufferSize = sizeof(vertices[0]) * vertices.size();
         VkBuffer vertStagingBuffer;
@@ -1123,7 +1125,7 @@ private:
             vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
             vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
-            vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indicesCount), 1, 0, 0, 0);
+            vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(verticesCount), 1, 0, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
             if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
@@ -1193,7 +1195,7 @@ private:
         auto currentTime = std::chrono::high_resolution_clock::now();
         float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
         UniformBufferObject ubo{};
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(10.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
         ubo.proj[1][1] *= -1;
