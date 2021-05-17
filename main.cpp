@@ -6,9 +6,6 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "extlibs/stb_image.h"
-
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -86,8 +83,6 @@ private:
     VkCommandPool commandPool;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<VkCommandBuffer> commandBuffers;
@@ -142,10 +137,9 @@ private:
         createCommandPool();
         createDepthResources();
         createFramebuffers();
-        createTextureImage();
+        createDataSource();
         createTextureImageView();
         createTextureSampler();
-        createDataBuffer();
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -211,8 +205,6 @@ private:
         vkDestroyImage(logicalDevice, textureImage, nullptr);
         vkFreeMemory(logicalDevice, textureImageMemory, nullptr);
         vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
-        vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
-        vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
         vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -646,8 +638,8 @@ private:
         vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
         vertexInputInfo.vertexAttributeDescriptionCount = 0;
         vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
-        auto bindingDescription = Vertex::getBindingDescription();
-        auto attributeDescriptions = Vertex::getAttributeDescriptions();
+        auto bindingDescription = getBindingDescription();
+        auto attributeDescriptions = getAttributeDescriptions();
         vertexInputInfo.vertexBindingDescriptionCount = 1;
         vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
         vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
@@ -932,14 +924,17 @@ private:
         vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
     }
 
-    void createDataBuffer() {
-        std::vector<Vertex> vertices;
-        std::vector<uint16_t> indices;
-        genTetrahedralGlobe(vertices, indices, 0.0, 0.0, 0.0);
-        indicesCount = indices.size();
-        verticesCount = vertices.size();
+    void createDataSource() {
+        GlobeInfo globe;
+        genTetrahedralGlobe(globe, 0.0, 0.0, 0.0);
+        createVertexBuffer(globe.vertices);
+        createTextureImage(globe.texture.data, globe.texture.w, globe.texture.h);
+        stbi_image_free(globe.texture.data);
+    }
 
+    void createVertexBuffer(std::vector<Vertex> &vertices) {
         VkDeviceSize vertBufferSize = sizeof(vertices[0]) * vertices.size();
+        verticesCount = vertices.size();
         VkBuffer vertStagingBuffer;
         VkDeviceMemory vertStagingBufferMemory;
         createBuffer(vertBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -955,23 +950,6 @@ private:
         copyBuffer(vertStagingBuffer, vertexBuffer, vertBufferSize);
         vkDestroyBuffer(logicalDevice, vertStagingBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertStagingBufferMemory, nullptr);
-
-        VkDeviceSize idxBufferSize = sizeof(indices[0]) * indices.size();
-        VkBuffer idxStagingBuffer;
-        VkDeviceMemory idxStagingBufferMemory;
-        createBuffer(idxBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,\
-                idxStagingBuffer, idxStagingBufferMemory);
-        void* idxData;
-        vkMapMemory(logicalDevice, idxStagingBufferMemory, 0, idxBufferSize, 0, &idxData);
-        memcpy(idxData, indices.data(), (size_t) idxBufferSize);
-        vkUnmapMemory(logicalDevice, idxStagingBufferMemory);
-        createBuffer(idxBufferSize,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
-        copyBuffer(idxStagingBuffer, indexBuffer, idxBufferSize);
-        vkDestroyBuffer(logicalDevice, idxStagingBuffer, nullptr);
-        vkFreeMemory(logicalDevice, idxStagingBufferMemory, nullptr);
     }
 
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
@@ -1123,7 +1101,6 @@ private:
             VkBuffer vertexBuffers[] = {vertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
-            vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
             vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
             vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(verticesCount), 1, 0, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
@@ -1196,7 +1173,7 @@ private:
         float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
         UniformBufferObject ubo{};
         ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(10.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(1.5f, 1.5f, 1.5f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
         ubo.proj[1][1] *= -1;
 
@@ -1226,13 +1203,9 @@ private:
         }
     }
 
-    void createTextureImage() {
-        int texWidth, texHeight, texChannels;
-        stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-        VkDeviceSize imageSize = texWidth * texHeight * 4;
-        if (!pixels) {
-            throw std::runtime_error("failed to load texture image!");
-        }
+    // RGBA
+    void createTextureImage(unsigned char *pixels, int &image_w, int &image_h) {
+        VkDeviceSize imageSize = image_w * image_h * 4;
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -1243,12 +1216,11 @@ private:
         vkMapMemory(logicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
         memcpy(data, pixels, static_cast<size_t>(imageSize));
         vkUnmapMemory(logicalDevice, stagingBufferMemory);
-        stbi_image_free(pixels);
-        createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+        createImage(image_w, image_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(image_w), static_cast<uint32_t>(image_h));
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
         vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
@@ -1407,6 +1379,31 @@ private:
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
         auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
+    }
+
+    static VkVertexInputBindingDescription getBindingDescription() {
+        VkVertexInputBindingDescription bindingDescription{};
+        bindingDescription.binding = 0;
+        bindingDescription.stride = sizeof(Vertex);
+        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        return bindingDescription;
+    }
+
+    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+        attributeDescriptions[0].binding = 0;
+        attributeDescriptions[0].location = 0;
+        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[0].offset = offsetof(Vertex, pos);
+        attributeDescriptions[1].binding = 0;
+        attributeDescriptions[1].location = 1;
+        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[1].offset = offsetof(Vertex, color);
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+        return attributeDescriptions;
     }
 };
 

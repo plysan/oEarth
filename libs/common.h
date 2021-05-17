@@ -32,4 +32,15 @@ struct Vertex {
     }
 };
 
+struct TextureSource {
+    unsigned char *data;
+    int w;
+    int h;
+};
+
+struct GlobeInfo {
+    std::vector<Vertex> vertices;
+    TextureSource texture;
+};
+
 #endif // COMMON_H

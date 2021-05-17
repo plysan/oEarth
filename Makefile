@@ -1,8 +1,8 @@
 .DEFAULT_GOAL := compile
 
 CC = g++
-CXXFLAGS = -std=c++17 -O2
-LDFLAGS = -lglfw -lvulkan -ldl -lpthread
+CXXFLAGS = -std=c++17 -g
+LDFLAGS = -lglfw -ltiff -lvulkan -ldl -lpthread
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
 LDFLAGS += -lX11 -lXxf86vm -lXrandr -lXi
