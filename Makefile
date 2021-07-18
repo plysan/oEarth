@@ -10,7 +10,7 @@ endif
 
 SHADER := $(filter-out %.spv,$(wildcard shader.*))
 SPV := $(patsubst %,%.spv,$(SHADER))
-SRC := $(wildcard *.cpp)
+SRC := $(wildcard *.cpp) $(wildcard libs/*.cpp)
 OBJ := $(patsubst %.cpp,%.o,$(SRC))
 DEP := $(patsubst %.cpp,%.d,$(SRC))
 PROG := $(patsubst %.cpp,%,$(SRC))
@@ -29,15 +29,15 @@ $(DIR_TEXTURES)/texture.jpg:
 	wget https://vulkan-tutorial.com/images/texture.jpg -P $(DIR_TEXTURES)
 	touch $@
 
-compile_main: $(DEP) $(DIR_EXT_LIBS)/stb_image.h
-	@$(MAKE) $(PROG)
+compile_main: $(DEP) $(OBJ) $(DIR_EXT_LIBS)/stb_image.h
+	@$(CC) $(CXXFLAGS) $(LDFLAGS) -o main $(OBJ)
 
 ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
 -include $(DEP)
 endif
 
 %.d: %.cpp
-	@$(CC) -MM -MG $(CXXFLAGS) $< | sed 's/\($*\)\.o[ :]*/\1.o $@ : /g' > $@
+	@$(CC) -MM -MG $(CXXFLAGS) $< | sed 's/$(notdir $*)\.o[ :]*/$(subst /,\/,$*).o $(subst /,\/,$@) : /g' > $@
 
 %: %.d
 
