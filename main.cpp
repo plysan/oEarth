@@ -4,6 +4,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <iostream>
@@ -17,9 +18,11 @@
 #include <iomanip>
 #include <cstdint>
 #include <set>
+#include <thread>
+#include <chrono>
 
+#include "libs/utils.h"
 #include "libs/common.h"
-#define TETRAHEDRAL_GLOBE_IMPL
 #include "libs/tetrahedral_globe.h"
 
 
@@ -29,10 +32,17 @@ struct SwapChainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
+struct FrameParam {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+    VkDrawIndirectCommand drawParam;
+};
+
 class HelloTriangleApplication {
 
-    const uint32_t WIDTH = 800;
-    const uint32_t HEIGHT = 600;
+    const uint32_t WIDTH = 1280;
+    const uint32_t HEIGHT = 720;
 
     const std::vector<const char*> requiredValidationLayers = {
         "VK_LAYER_KHRONOS_validation",
@@ -79,6 +89,7 @@ private:
     VkDeviceMemory vertexBufferMemory;
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
+    void** uniformBuffersData;
     std::vector<VkCommandBuffer> commandBuffers;
     VkDescriptorPool descriptorPool;
     VkImage textureImage;
@@ -88,6 +99,9 @@ private:
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
+    TetrahedraGlobe *globe;
+    VkBuffer vertStagingBuffer;
+    VkDeviceMemory vertStagingBufferMemory;
 
     // stuff cleanup free
     VkPhysicalDevice phyDevice = VK_NULL_HANDLE;
@@ -105,8 +119,12 @@ private:
     size_t currentFrame = 0;
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
-    int indicesCount;
-    int verticesCount;
+    int curVertCount;
+    Camera camera{
+        .pos = glm::dvec3(1.5, 1.5, 1.5),
+        .dir = glm::dvec3(-1.5, -1.5, 0)
+    };
+    bool inUpdate = false;
 
     void initWindow() {
         glfwInit();
@@ -139,6 +157,8 @@ private:
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+        std::thread t1(&HelloTriangleApplication::updateDataSource, this);
+        t1.detach();
     }
 
     void recreateSwapChain() {
@@ -201,6 +221,8 @@ private:
         vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
         vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
+        vkDestroyBuffer(logicalDevice, vertStagingBuffer, nullptr);
+        vkFreeMemory(logicalDevice, vertStagingBufferMemory, nullptr);
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
             vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
@@ -355,7 +377,9 @@ private:
             VkDebugUtilsMessageTypeFlagsEXT messageType,
             const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
             void* pUserData) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+        if (messageSeverity & ~VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT) {
+            std::cerr << "Validation layer(" << messageSeverity << "): " << pCallbackData->pMessage << std::endl;
+        }
         return VK_FALSE;
     }
 
@@ -919,31 +943,46 @@ private:
     }
 
     void createDataSource() {
-        GlobeInfo globe;
-        genTetrahedralGlobe(globe, 0.0, 0.0, 0.0);
-        createVertexBuffer(globe.vertices);
-        createTextureImage(globe.texture.data, globe.texture.w, globe.texture.h);
-        stbi_image_free(globe.texture.data);
+        globe = new TetrahedraGlobe();
+        globe->texture.data = NULL;
+        globe->vert_max = 1000000;
+        globe->genGlobe(coord2Pos(37.7749f, -122.4194f, 0.0f));
+        curVertCount = globe->vertices.size();
+        createVertexBuffer(globe);
+        createTextureImage(globe);
+        free(globe->texture.data);
     }
 
-    void createVertexBuffer(std::vector<Vertex> &vertices) {
-        VkDeviceSize vertBufferSize = sizeof(vertices[0]) * vertices.size();
-        verticesCount = vertices.size();
-        VkBuffer vertStagingBuffer;
-        VkDeviceMemory vertStagingBufferMemory;
+    void updateDataSource() {
+        static glm::dvec3 lastCameraPos = glm::dvec3(0);
+        while (true) {
+            if (inUpdate) {
+                double distanceMoved = glm::distance(lastCameraPos, camera.pos);
+                if (distanceMoved > 0.01) {
+                    lastCameraPos = camera.pos;
+                    globe->genGlobe(camera.pos);
+                    curVertCount = globe->vertices.size();
+                    void* vertData;
+                    vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, sizeof(Vertex) * globe->vertices.size(), 0, &vertData);
+                    memcpy(vertData, globe->vertices.data(), (size_t)(sizeof(Vertex) * globe->vertices.size()));
+                    vkUnmapMemory(logicalDevice, vertStagingBufferMemory);
+                    inUpdate = false;
+                }
+            }
+            std::this_thread::sleep_for (std::chrono::seconds(2));
+        }
+    }
+
+    void createVertexBuffer(TetrahedraGlobe *globe) {
+        std::cout << "Init size: " << sizeof(Vertex) * globe->vertices.size() << '\n';
+        VkDeviceSize vertBufferSize = sizeof(Vertex) * globe->vert_max;
+        std::cout << "Max size: " << vertBufferSize << '\n';
         createBuffer(vertBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 vertStagingBuffer, vertStagingBufferMemory);
-        void* vertData;
-        vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, vertBufferSize, 0, &vertData);
-        memcpy(vertData, vertices.data(), (size_t) vertBufferSize);
-        vkUnmapMemory(logicalDevice, vertStagingBufferMemory);
         createBuffer(vertBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-        copyBuffer(vertStagingBuffer, vertexBuffer, vertBufferSize);
-        vkDestroyBuffer(logicalDevice, vertStagingBuffer, nullptr);
-        vkFreeMemory(logicalDevice, vertStagingBufferMemory, nullptr);
     }
 
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
@@ -984,11 +1023,15 @@ private:
     }
 
     void createUniformBuffers() {
-        VkDeviceSize bufferSize = sizeof(Camera);
+        VkDeviceSize bufferSize = sizeof(FrameParam);
         uniformBuffers.resize(swapChainImages.size());
         uniformBuffersMemory.resize(swapChainImages.size());
         for (size_t i = 0; i < swapChainImages.size(); i++) {
-            createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i], uniformBuffersMemory[i]);
+            createBuffer(bufferSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    uniformBuffers[i], uniformBuffersMemory[i]);
+            vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, sizeof(FrameParam), 0, &uniformBuffersData[i]);
         }
     }
 
@@ -1023,7 +1066,7 @@ private:
             VkDescriptorBufferInfo bufferInfo{};
             bufferInfo.buffer = uniformBuffers[i];
             bufferInfo.offset = 0;
-            bufferInfo.range = sizeof(Camera);
+            bufferInfo.range = sizeof(FrameParam);
             VkDescriptorImageInfo imageInfo{};
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfo.imageView = textureImageView;
@@ -1096,7 +1139,8 @@ private:
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
             vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
-            vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(verticesCount), 1, 0, 0);
+            VkDeviceSize offset = sizeof(FrameParam) - sizeof(VkDrawIndirectCommand);
+            vkCmdDrawIndirect(commandBuffers[i], uniformBuffers[i], offset, 1, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
             if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
@@ -1105,6 +1149,8 @@ private:
     }
 
     void drawFrame() {
+        static double maxCost = 0.0;
+        clock_t stamp1 = clock();
         vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
         uint32_t imageIndex;
         VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
@@ -1116,12 +1162,14 @@ private:
         }
         // Check if a previous frame is using this image (i.e. there is its fence to wait on)
         if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-            vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+            //vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
         }
         // Mark the image as now being in use by this frame
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
 
+        clock_t stamp2 = clock();
         updateUniformBuffer(imageIndex);
+        clock_t stamp3 = clock();
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1155,20 +1203,38 @@ private:
             framebufferResized = false;
             recreateSwapChain();
         } else if (result != VK_SUCCESS) {
-            throw std::runtime_error("failed to present swap chain image!");
+            std::cout << "failed present swap chain image: " << result << '\n';
+            throw std::runtime_error("failed to present swap chain image: " + result);
         }
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-        vkQueueWaitIdle(presentQueue);
+        if (!inUpdate) {
+            copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * globe->vertices.size());
+            std::cout << "Copy size: " << globe->vertices.size() << '\n';
+            inUpdate = true;
+        }
+        clock_t stamp4 = clock();
+        double costTmp = stamp4 - stamp1;
+        if (costTmp > maxCost) {
+            maxCost = costTmp;
+            std::cout << "Max frame cost: " << maxCost << " cps: " << CLOCKS_PER_SEC << " details: " << stamp2-stamp1 << ' ' << stamp3-stamp2 << ' ' << stamp4-stamp3 << '\n';
+        }
     }
 
     void updateUniformBuffer(uint32_t currentImage) {
-        Camera camera{};
         camera.aspect = swapChainExtent.width / (float) swapChainExtent.height;
-        updateCamera(camera);
-        void* data;
-        vkMapMemory(logicalDevice, uniformBuffersMemory[currentImage], 0, sizeof(camera), 0, &data);
-        memcpy(data, &camera, sizeof(camera));
-        vkUnmapMemory(logicalDevice, uniformBuffersMemory[currentImage]);
+        updateCamera(camera, window);
+        //TODO
+        glm::dvec3 dataOffset = glm::dvec3(0.0, 0.0, 0.0);
+        FrameParam fParam{};
+        fParam.model = glm::mat4(1.0f);
+        glm::vec3 cameraPos = lvec3(camera.pos - dataOffset);
+        fParam.view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
+        fParam.proj = camera.proj;
+        fParam.drawParam.vertexCount = curVertCount;
+        fParam.drawParam.instanceCount = 1;
+        fParam.drawParam.firstVertex = 0;
+        fParam.drawParam.firstInstance = 0;
+        memcpy(uniformBuffersData[currentImage], &fParam, sizeof(FrameParam));
     }
 
     void createSyncObjects() {
@@ -1192,8 +1258,10 @@ private:
     }
 
     // RGBA
-    void createTextureImage(unsigned char *pixels, int &image_w, int &image_h) {
-        VkDeviceSize imageSize = image_w * image_h * 4;
+    void createTextureImage(GlobeInfo *globe) {
+        int imageW = globe->texture.w;
+        int imageH = globe->texture.h;
+        VkDeviceSize imageSize = imageW * imageH * 4;
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -1202,13 +1270,13 @@ private:
                 stagingBuffer, stagingBufferMemory);
         void* data;
         vkMapMemory(logicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixels, static_cast<size_t>(imageSize));
+        memcpy(data, globe->texture.data, static_cast<size_t>(imageSize));
         vkUnmapMemory(logicalDevice, stagingBufferMemory);
-        createImage(image_w, image_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+        createImage(imageW, imageH, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(image_w), static_cast<uint32_t>(image_h));
+        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(imageW), static_cast<uint32_t>(imageH));
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
         vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
