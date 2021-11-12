@@ -7,7 +7,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <GLFW/glfw3.h>
-#include "utils.h"
+#include "../utils/coord.h"
 #include "common.h"
 
 

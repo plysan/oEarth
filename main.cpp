@@ -7,6 +7,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <stddef.h>
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -21,9 +22,10 @@
 #include <thread>
 #include <chrono>
 
-#include "libs/utils.h"
+#include "utils/coord.h"
 #include "libs/common.h"
 #include "libs/tetrahedral_globe.h"
+#include "libs/sky_dome.h"
 
 
 struct SwapChainSupportDetails {
@@ -36,10 +38,24 @@ struct FrameParam {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 proj;
-    VkDrawIndirectCommand drawParam;
+    int target;
+    union {
+        VkDrawIndirectCommand terrainParam;
+        VkDrawIndexedIndirectCommand skyParam;
+    };
+    int pad1;
+    int pad2;
 };
 
-class HelloTriangleApplication {
+struct StagingBufferStruct {
+    int terrainVertMax;
+    int terrainVertSize;
+    int skyVertMax;
+    int skyIdxMax;
+    int skyIdxSize;
+};
+
+class VKDemo {
 
     const uint32_t WIDTH = 1280;
     const uint32_t HEIGHT = 720;
@@ -87,9 +103,11 @@ private:
     VkCommandPool commandPool;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
-    void** uniformBuffersData;
+    std::vector<void*> uniformBuffersData;
     std::vector<VkCommandBuffer> commandBuffers;
     VkDescriptorPool descriptorPool;
     VkImage textureImage;
@@ -100,6 +118,7 @@ private:
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
     TetrahedraGlobe *globe;
+    SkyDome skyDome;
     VkBuffer vertStagingBuffer;
     VkDeviceMemory vertStagingBufferMemory;
 
@@ -119,12 +138,14 @@ private:
     size_t currentFrame = 0;
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
-    int curVertCount;
+    StagingBufferStruct sbs;
+    glm::vec3 initPos = coord2Pos(0.0f, 0.0f, 1.5f);
     Camera camera{
-        .pos = glm::dvec3(1.5, 1.5, 1.5),
-        .dir = glm::dvec3(-1.5, -1.5, 0)
+        .pos = initPos,
+        .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f)
     };
     bool inUpdate = false;
+    FrameParam fParams[2];
 
     void initWindow() {
         glfwInit();
@@ -149,7 +170,7 @@ private:
         createCommandPool();
         createDepthResources();
         createFramebuffers();
-        createDataSource();
+        createStagingBufferStruct();
         createTextureImageView();
         createTextureSampler();
         createUniformBuffers();
@@ -157,7 +178,7 @@ private:
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
-        std::thread t1(&HelloTriangleApplication::updateDataSource, this);
+        std::thread t1(&VKDemo::updateStagingBufferStruct, this);
         t1.detach();
     }
 
@@ -221,6 +242,8 @@ private:
         vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
         vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
+        vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
+        vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
         vkDestroyBuffer(logicalDevice, vertStagingBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertStagingBufferMemory, nullptr);
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -430,6 +453,9 @@ private:
         VkPhysicalDeviceProperties deviceProperties;
         vkGetPhysicalDeviceProperties(lPhysicalDevice, &deviceProperties);
 
+        VkDeviceSize ubAlign = deviceProperties.limits.minUniformBufferOffsetAlignment;
+        assert(sizeof(FrameParam) % ubAlign == 0);
+
         VkPhysicalDeviceFeatures supportedFeatures;
         vkGetPhysicalDeviceFeatures(lPhysicalDevice, &supportedFeatures);
         if (!supportedFeatures.samplerAnisotropy) {
@@ -609,7 +635,7 @@ private:
     void createDescriptorSetLayout() {
         VkDescriptorSetLayoutBinding uboLayoutBinding{};
         uboLayoutBinding.binding = 0;
-        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         uboLayoutBinding.descriptorCount = 1;
         uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
@@ -942,18 +968,22 @@ private:
         vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
     }
 
-    void createDataSource() {
+    void createStagingBufferStruct() {
+        sbs.terrainVertMax = 500000;
+        sbs.skyVertMax = 10000;
+        sbs.skyIdxMax = 10000;
         globe = new TetrahedraGlobe();
         globe->texture.data = NULL;
-        globe->vert_max = 1000000;
-        globe->genGlobe(coord2Pos(37.7749f, -122.4194f, 0.0f));
-        curVertCount = globe->vertices.size();
-        createVertexBuffer(globe);
+        globe->genGlobe(coord2DPos(37.7749f, -122.4194f, 0.0f));
+        sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe->vertices.size());
+        skyDome.genSkyDome(20, 40, 0.02f);
+        sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
+        createBuffers();
         createTextureImage(globe);
         free(globe->texture.data);
     }
 
-    void updateDataSource() {
+    void updateStagingBufferStruct() {
         static glm::dvec3 lastCameraPos = glm::dvec3(0);
         while (true) {
             if (inUpdate) {
@@ -961,11 +991,16 @@ private:
                 if (distanceMoved > 0.01) {
                     lastCameraPos = camera.pos;
                     globe->genGlobe(camera.pos);
-                    curVertCount = globe->vertices.size();
+                    skyDome.genSkyDome(20, 40, 0.02f);
                     void* vertData;
-                    vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, sizeof(Vertex) * globe->vertices.size(), 0, &vertData);
-                    memcpy(vertData, globe->vertices.data(), (size_t)(sizeof(Vertex) * globe->vertices.size()));
+                    vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, VK_WHOLE_SIZE, 0, &vertData);
+                    memcpy(vertData, globe->vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.terrainVertMax, (int)globe->vertices.size())));
+                    memcpy((char*)vertData + sizeof(Vertex) * sbs.terrainVertMax, skyDome.vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.skyVertMax, (int)skyDome.vertices.size())));
+                    memcpy((char*)vertData + sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyIdxMax), skyDome.indices.data(), (size_t)(sizeof(int) * std::min(sbs.skyIdxMax, (int)skyDome.indices.size())));
                     vkUnmapMemory(logicalDevice, vertStagingBufferMemory);
+                    //TODO atomic
+                    sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe->vertices.size());
+                    sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
                     inUpdate = false;
                 }
             }
@@ -973,23 +1008,28 @@ private:
         }
     }
 
-    void createVertexBuffer(TetrahedraGlobe *globe) {
-        std::cout << "Init size: " << sizeof(Vertex) * globe->vertices.size() << '\n';
-        VkDeviceSize vertBufferSize = sizeof(Vertex) * globe->vert_max;
-        std::cout << "Max size: " << vertBufferSize << '\n';
+    void createBuffers() {
+        std::cout << "Init vertex count: globe: " << globe->vertices.size() << " sky: " << skyDome.vertices.size() << '\n';
+        VkDeviceSize vertBufferSize = sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax);
+        std::cout << "Allocate vertex size: " << sizeof(Vertex) << " x " << (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax) << " = " << vertBufferSize << '\n';
         createBuffer(vertBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 vertStagingBuffer, vertStagingBufferMemory);
         createBuffer(vertBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
+        VkDeviceSize indexBufferSize = sizeof(int) * sbs.skyIdxMax;
+        std::cout << "Allocate index size: " << sizeof(int) << " x " << sbs.skyIdxMax << " = " << indexBufferSize << '\n';
+        createBuffer(indexBufferSize,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
     }
 
-    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, int srcOffset, int dstOffset, VkDeviceSize size) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
         VkBufferCopy copyRegion{};
-        copyRegion.srcOffset = 0; // Optional
-        copyRegion.dstOffset = 0; // Optional
+        copyRegion.srcOffset = srcOffset;
+        copyRegion.dstOffset = dstOffset;
         copyRegion.size = size;
         vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
         endSingleTimeCommands(commandBuffer);
@@ -1023,21 +1063,24 @@ private:
     }
 
     void createUniformBuffers() {
+        //TODO
         VkDeviceSize bufferSize = sizeof(FrameParam);
+        bufferSize = sizeof(FrameParam) * 2;
         uniformBuffers.resize(swapChainImages.size());
+        uniformBuffersData.resize(swapChainImages.size());
         uniformBuffersMemory.resize(swapChainImages.size());
         for (size_t i = 0; i < swapChainImages.size(); i++) {
             createBuffer(bufferSize,
                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     uniformBuffers[i], uniformBuffersMemory[i]);
-            vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, sizeof(FrameParam), 0, &uniformBuffersData[i]);
+            vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersData[i]);
         }
     }
 
     void createDescriptorPool() {
         std::array<VkDescriptorPoolSize, 2> poolSizes{};
-        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         poolSizes[0].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         poolSizes[1].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
@@ -1077,7 +1120,7 @@ private:
             descriptorWrites[0].dstSet = descriptorSets[i];
             descriptorWrites[0].dstBinding = 0;
             descriptorWrites[0].dstArrayElement = 0;
-            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
             descriptorWrites[0].descriptorCount = 1;
             descriptorWrites[0].pBufferInfo = &bufferInfo;
             descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1138,9 +1181,16 @@ private:
             VkBuffer vertexBuffers[] = {vertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
-            vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 0, nullptr);
-            VkDeviceSize offset = sizeof(FrameParam) - sizeof(VkDrawIndirectCommand);
-            vkCmdDrawIndirect(commandBuffers[i], uniformBuffers[i], offset, 1, 0);
+            vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            uint32_t dynamicOffset = 0;
+            vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 1, &dynamicOffset);
+            VkDeviceSize terrainOffset = offsetof(struct FrameParam, terrainParam);
+            vkCmdDrawIndirect(commandBuffers[i], uniformBuffers[i], terrainOffset, 1, 0);
+            dynamicOffset = sizeof(FrameParam);
+            vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 1, &dynamicOffset);
+            VkDeviceSize skyOffset = dynamicOffset + offsetof(struct FrameParam, skyParam);
+            //TODO
+            vkCmdDrawIndexedIndirect(commandBuffers[i], uniformBuffers[i], skyOffset, 1, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
             if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
@@ -1208,7 +1258,9 @@ private:
         }
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
         if (!inUpdate) {
-            copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * globe->vertices.size());
+            copyBuffer(vertStagingBuffer, vertexBuffer, 0, 0, sizeof(Vertex) * std::min((int)globe->vertices.size(), sbs.terrainVertMax));
+            copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * std::min((int)skyDome.vertices.size(), sbs.skyVertMax));
+            copyBuffer(vertStagingBuffer, indexBuffer, sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax), 0, sizeof(int) * std::min((int)skyDome.indices.size(), sbs.skyIdxMax));
             std::cout << "Copy size: " << globe->vertices.size() << '\n';
             inUpdate = true;
         }
@@ -1224,17 +1276,27 @@ private:
         camera.aspect = swapChainExtent.width / (float) swapChainExtent.height;
         updateCamera(camera, window);
         //TODO
+        fParams[0].target = 0;
         glm::dvec3 dataOffset = glm::dvec3(0.0, 0.0, 0.0);
-        FrameParam fParam{};
-        fParam.model = glm::mat4(1.0f);
+        fParams[0].model = glm::mat4(1.0f);
         glm::vec3 cameraPos = lvec3(camera.pos - dataOffset);
-        fParam.view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
-        fParam.proj = camera.proj;
-        fParam.drawParam.vertexCount = curVertCount;
-        fParam.drawParam.instanceCount = 1;
-        fParam.drawParam.firstVertex = 0;
-        fParam.drawParam.firstInstance = 0;
-        memcpy(uniformBuffersData[currentImage], &fParam, sizeof(FrameParam));
+        fParams[0].view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
+        fParams[0].proj = camera.proj;
+        fParams[0].terrainParam.vertexCount = sbs.terrainVertSize;
+        fParams[0].terrainParam.instanceCount = 1;
+        fParams[0].terrainParam.firstVertex = 0;
+        fParams[0].terrainParam.firstInstance = 0;
+        fParams[1].target = 1;
+        glm::mat4 skyRot = rotByLookAt(cameraPos);
+        fParams[1].model = skyRot;
+        fParams[1].view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
+        fParams[1].proj = camera.proj;
+        fParams[1].skyParam.indexCount = sbs.skyIdxSize;
+        fParams[1].skyParam.instanceCount = 1;
+        fParams[1].skyParam.firstIndex = 0;
+        fParams[1].skyParam.vertexOffset = sbs.terrainVertMax;
+        fParams[1].skyParam.firstInstance = 0;
+        memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 2);
     }
 
     void createSyncObjects() {
@@ -1433,7 +1495,7 @@ private:
     }
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        auto app = reinterpret_cast<VKDemo*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
 
@@ -1464,7 +1526,7 @@ private:
 };
 
 int main() {
-    HelloTriangleApplication app;
+    VKDemo app;
     try {
         app.run();
     } catch (const std::exception& e) {

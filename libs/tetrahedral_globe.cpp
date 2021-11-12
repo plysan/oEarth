@@ -7,7 +7,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtx/string_cast.hpp>
 
-#include "utils.h"
+#include "../utils/coord.h"
 #include "tetrahedral_globe.h"
 #include "common.h"
 #define STB_IMAGE_IMPLEMENTATION
@@ -16,7 +16,7 @@
 
 //TODO macro
 float getTexX(glm::vec3 &vert) {
-    float texX = glm::orientedAngle(glm::vec2(1.0f, 0.0f), glm::normalize(glm::vec2(vert.x, vert.y))) / glm::pi<double>() / 2.0f;
+    float texX = glm::orientedAngle(glm::vec2(-1.0f, 0.0f), glm::normalize(glm::vec2(vert.x, vert.z))) / glm::pi<double>() / 2.0f;
     if (texX < 0) {
         texX += 1;
     }
@@ -24,7 +24,7 @@ float getTexX(glm::vec3 &vert) {
 }
 
 void TetrahedraGlobe::upLevel(TriNode &node) {
-    if (vert_cur + 12 > vert_max || node.level > 13) {
+    if (node.level > 12) {
         return;
     }
     glm::vec3 mid_vert_1 = glm::normalize(node.vert_1 + node.vert_2);
@@ -41,7 +41,7 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
     }
     glm::vec2 mid_tex_1, mid_tex_2, mid_tex_3;
     mid_tex_2.x = getTexX(mid_vert_2);
-    mid_tex_2.y = glm::angle(mid_vert_2, glm::vec3(0.0f, 0.0f, 1.0f)) / glm::pi<double>();
+    mid_tex_2.y = glm::angle(mid_vert_2, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
     if (node.is_pole) {
         mid_tex_1.x = node.tex_2.x;
         mid_tex_1.y = (node.tex_1.y + node.tex_2.y) / 2.0f;
@@ -58,8 +58,8 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
         } else {
             mid_tex_3.x = getTexX(mid_vert_3);
         }
-        mid_tex_1.y = glm::angle(mid_vert_1, glm::vec3(0.0f, 0.0f, 1.0f)) / glm::pi<double>();
-        mid_tex_3.y = glm::angle(mid_vert_3, glm::vec3(0.0f, 0.0f, 1.0f)) / glm::pi<double>();
+        mid_tex_1.y = glm::angle(mid_vert_1, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
+        mid_tex_3.y = glm::angle(mid_vert_3, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
     }
 
     vert_cur += 12;
@@ -137,15 +137,18 @@ void TetrahedraGlobe::genGlobe(glm::dvec3 p_cam_pos) {
         texture.data = pixels;
     }
 
+    // Based on vulkan coordinate system.
+    // North pole at (0, -1, 0)
+    // lat:0;lng:0 at (1, 0, 0)
     std::vector<TriNode> nodes = {
-        {true, 0, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.125f, 0.0f}, {0.0f, 0.5f}, {0.25f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.375f, 0.0f}, {0.25f, 0.5f}, {0.5f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, 1.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, {0.625f, 0.0f}, {0.5f, 0.5f}, {0.75f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, 1.0f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.875f, 0.0f}, {0.75f, 0.5f}, {1.0f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.125f, 1.0f}, {0.25f, 0.5f}, {0.0f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.375f, 1.0f}, {0.5f, 0.5f}, {0.25f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, -1.0f}, {0.0f, -1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.625f, 1.0f}, {0.75f, 0.5f}, {0.5f, 0.5f}},
-        {true, 0, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, {0.875f, 1.0f}, {1.0f, 0.5f}, {0.75f, 0.5f}},
+        {true, 0, {0.0f, -1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.125f, 0.0f}, {0.0f, 0.5f}, {0.25f, 0.5f}},
+        {true, 0, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}, {0.375f, 0.0f}, {0.25f, 0.5f}, {0.5f, 0.5f}},
+        {true, 0, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.625f, 0.0f}, {0.5f, 0.5f}, {0.75f, 0.5f}},
+        {true, 0, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {-1.0f, 0.0f, 0.0f}, {0.875f, 0.0f}, {0.75f, 0.5f}, {1.0f, 0.5f}},
+        {true, 0, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 0.0f}, {0.125f, 1.0f}, {0.25f, 0.5f}, {0.0f, 0.5f}},
+        {true, 0, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.375f, 1.0f}, {0.5f, 0.5f}, {0.25f, 0.5f}},
+        {true, 0, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.625f, 1.0f}, {0.75f, 0.5f}, {0.5f, 0.5f}},
+        {true, 0, {0.0f, 1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.875f, 1.0f}, {1.0f, 0.5f}, {0.75f, 0.5f}},
     };
     vert_cur = 24;
     for (auto &node : nodes) {

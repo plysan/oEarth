@@ -10,7 +10,7 @@ endif
 
 SHADER := $(filter-out %.spv,$(wildcard shader.*))
 SPV := $(patsubst %,%.spv,$(SHADER))
-SRC := $(wildcard *.cpp) $(wildcard libs/*.cpp)
+SRC := $(wildcard *.cpp) $(wildcard libs/*.cpp) $(wildcard utils/*.cpp)
 OBJ := $(patsubst %.cpp,%.o,$(SRC))
 DEP := $(patsubst %.cpp,%.d,$(SRC))
 PROG := $(patsubst %.cpp,%,$(SRC))

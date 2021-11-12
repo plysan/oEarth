@@ -27,8 +27,7 @@ struct Camera {
 };
 
 struct GlobeInfo {
-    std::vector<Vertex> vertices = std::vector<Vertex>(0);
-    int vert_max;
+    std::vector<Vertex> vertices;
     int vert_cur;
     TextureSource texture;
     virtual void genGlobe(glm::dvec3 p_cam_pos) = 0;
