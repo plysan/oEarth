@@ -8,7 +8,7 @@ ifeq ($(UNAME), Linux)
 LDFLAGS += -lX11 -lXxf86vm -lXrandr -lXi
 endif
 
-SHADER := $(filter-out %.spv,$(wildcard shader.*))
+SHADER := $(filter-out %.spv,$(wildcard shaders/shader.*))
 SPV := $(patsubst %,%.spv,$(SHADER))
 SRC := $(wildcard *.cpp) $(wildcard libs/*.cpp) $(wildcard utils/*.cpp)
 OBJ := $(patsubst %.cpp,%.o,$(SRC))
@@ -18,7 +18,7 @@ PROG := $(patsubst %.cpp,%,$(SRC))
 DIR_EXT_LIBS := extlibs
 DIR_TEXTURES := textures
 
-%.spv: %
+%.spv: % vars.h
 	glslc $< -o $@
 
 $(DIR_EXT_LIBS)/stb_image.h:

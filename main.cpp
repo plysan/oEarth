@@ -26,6 +26,7 @@
 #include "libs/common.h"
 #include "libs/tetrahedral_globe.h"
 #include "libs/sky_dome.h"
+#include "vars.h"
 
 
 struct SwapChainSupportDetails {
@@ -110,10 +111,14 @@ private:
     std::vector<void*> uniformBuffersData;
     std::vector<VkCommandBuffer> commandBuffers;
     VkDescriptorPool descriptorPool;
-    VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
-    VkImageView textureImageView;
-    VkSampler textureSampler;
+    VkImage terrainImage;
+    VkDeviceMemory terrainImageMemory;
+    VkImageView terrainImageView;
+    VkSampler terrainSampler;
+    VkImage scatterImage;
+    VkDeviceMemory scatterImageMemory;
+    VkImageView scatterImageView;
+    VkSampler scatterSampler;
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
@@ -172,7 +177,9 @@ private:
         createFramebuffers();
         createStagingBufferStruct();
         createTextureImageView();
-        createTextureSampler();
+        createScatterImageView();
+        createTerrainSampler();
+        createScatterSampler();
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -235,10 +242,14 @@ private:
 
     void cleanup() {
         cleanupSwapChain();
-        vkDestroySampler(logicalDevice, textureSampler, nullptr);
-        vkDestroyImageView(logicalDevice, textureImageView, nullptr);
-        vkDestroyImage(logicalDevice, textureImage, nullptr);
-        vkFreeMemory(logicalDevice, textureImageMemory, nullptr);
+        vkDestroySampler(logicalDevice, terrainSampler, nullptr);
+        vkDestroyImageView(logicalDevice, terrainImageView, nullptr);
+        vkDestroyImage(logicalDevice, terrainImage, nullptr);
+        vkFreeMemory(logicalDevice, terrainImageMemory, nullptr);
+        vkDestroySampler(logicalDevice, scatterSampler, nullptr);
+        vkDestroyImageView(logicalDevice, scatterImageView, nullptr);
+        vkDestroyImage(logicalDevice, scatterImage, nullptr);
+        vkFreeMemory(logicalDevice, scatterImageMemory, nullptr);
         vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
         vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
         vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
@@ -628,7 +639,7 @@ private:
     void createImageViews() {
         swapChainImageViews.resize(swapChainImages.size());
         for (size_t i = 0; i < swapChainImages.size(); i++) {
-            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 2);
         }
     }
 
@@ -637,17 +648,24 @@ private:
         uboLayoutBinding.binding = 0;
         uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         uboLayoutBinding.descriptorCount = 1;
-        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_ALL;
         uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
 
-        VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-        samplerLayoutBinding.binding = 1;
-        samplerLayoutBinding.descriptorCount = 1;
-        samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        samplerLayoutBinding.pImmutableSamplers = nullptr;
-        samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding terrainSamplerLB{};
+        terrainSamplerLB.binding = 1;
+        terrainSamplerLB.descriptorCount = 1;
+        terrainSamplerLB.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        terrainSamplerLB.pImmutableSamplers = nullptr;
+        terrainSamplerLB.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+        VkDescriptorSetLayoutBinding scatterSamplerLB{};
+        scatterSamplerLB.binding = 2;
+        scatterSamplerLB.descriptorCount = 1;
+        scatterSamplerLB.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        scatterSamplerLB.pImmutableSamplers = nullptr;
+        scatterSamplerLB.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings = {uboLayoutBinding, terrainSamplerLB, scatterSamplerLB};
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -659,8 +677,8 @@ private:
     }
 
     void createGraphicsPipeline() {
-        auto vertShaderCode = readFile("shader.vert.spv");
-        auto fragShaderCode = readFile("shader.frag.spv");
+        auto vertShaderCode = readFile("shaders/shader.vert.spv");
+        auto fragShaderCode = readFile("shaders/shader.frag.spv");
         VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
 
@@ -920,9 +938,9 @@ private:
 
     void createDepthResources() {
         VkFormat depthFormat = findDepthFormat();
-        createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL,
+        createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 2);
     }
 
     VkFormat findDepthFormat() {
@@ -970,16 +988,17 @@ private:
 
     void createStagingBufferStruct() {
         sbs.terrainVertMax = 500000;
-        sbs.skyVertMax = 10000;
-        sbs.skyIdxMax = 10000;
+        sbs.skyVertMax = 25000;
+        sbs.skyIdxMax = 25000;
         globe = new TetrahedraGlobe();
         globe->texture.data = NULL;
         globe->genGlobe(coord2DPos(37.7749f, -122.4194f, 0.0f));
         sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe->vertices.size());
-        skyDome.genSkyDome(20, 40, 0.02f);
+        skyDome.genSkyDome(camera.pos);
         sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
         createBuffers();
-        createTextureImage(globe);
+        createTerrainImage(globe);
+        createScatterImage(skyDome);
         free(globe->texture.data);
     }
 
@@ -988,10 +1007,10 @@ private:
         while (true) {
             if (inUpdate) {
                 double distanceMoved = glm::distance(lastCameraPos, camera.pos);
-                if (distanceMoved > 0.01) {
+                if (distanceMoved > 0.011) {
                     lastCameraPos = camera.pos;
                     globe->genGlobe(camera.pos);
-                    skyDome.genSkyDome(20, 40, 0.02f);
+                    skyDome.genSkyDome(camera.pos);
                     void* vertData;
                     vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, VK_WHOLE_SIZE, 0, &vertData);
                     memcpy(vertData, globe->vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.terrainVertMax, (int)globe->vertices.size())));
@@ -1079,11 +1098,13 @@ private:
     }
 
     void createDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        std::array<VkDescriptorPoolSize, 3> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         poolSizes[0].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         poolSizes[1].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
+        poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[2].descriptorCount = static_cast<uint32_t>(swapChainImages.size());
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -1110,12 +1131,16 @@ private:
             bufferInfo.buffer = uniformBuffers[i];
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(FrameParam);
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = textureImageView;
-            imageInfo.sampler = textureSampler;
+            VkDescriptorImageInfo terrainImageInfo{};
+            terrainImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            terrainImageInfo.imageView = terrainImageView;
+            terrainImageInfo.sampler = terrainSampler;
+            VkDescriptorImageInfo scatterImageInfo{};
+            scatterImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            scatterImageInfo.imageView = scatterImageView;
+            scatterImageInfo.sampler = scatterSampler;
 
-            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+            std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
             descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[0].dstSet = descriptorSets[i];
             descriptorWrites[0].dstBinding = 0;
@@ -1129,7 +1154,14 @@ private:
             descriptorWrites[1].dstArrayElement = 0;
             descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             descriptorWrites[1].descriptorCount = 1;
-            descriptorWrites[1].pImageInfo = &imageInfo;
+            descriptorWrites[1].pImageInfo = &terrainImageInfo;
+            descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[2].dstSet = descriptorSets[i];
+            descriptorWrites[2].dstBinding = 2;
+            descriptorWrites[2].dstArrayElement = 0;
+            descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[2].descriptorCount = 1;
+            descriptorWrites[2].pImageInfo = &scatterImageInfo;
             vkUpdateDescriptorSets(logicalDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
     }
@@ -1320,9 +1352,9 @@ private:
     }
 
     // RGBA
-    void createTextureImage(GlobeInfo *globe) {
-        int imageW = globe->texture.w;
-        int imageH = globe->texture.h;
+    void createTerrainImage(GlobeInfo *globe) {
+        uint32_t imageW = globe->texture.w;
+        uint32_t imageH = globe->texture.h;
         VkDeviceSize imageSize = imageW * imageH * 4;
 
         VkBuffer stagingBuffer;
@@ -1334,12 +1366,35 @@ private:
         vkMapMemory(logicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
         memcpy(data, globe->texture.data, static_cast<size_t>(imageSize));
         vkUnmapMemory(logicalDevice, stagingBufferMemory);
-        createImage(imageW, imageH, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+        createImage(imageW, imageH, 1, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(imageW), static_cast<uint32_t>(imageH));
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, terrainImage, terrainImageMemory);
+        transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(stagingBuffer, terrainImage, imageW, imageH, 1);
+        transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
+        vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+    }
+
+    void createScatterImage(SkyDome& skyDome) {
+        uint32_t scatter_texture_size = scatterTextureSunAngleSize * scatterTextureHeightSize;
+        VkDeviceSize imageSize = pow(scatter_texture_size, 3) * 4;
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                stagingBuffer, stagingBufferMemory);
+        skyDome.genScatterTexure();
+        void* data;
+        vkMapMemory(logicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
+        memcpy(data, skyDome.scatterTexture.data, static_cast<size_t>(imageSize));
+        vkUnmapMemory(logicalDevice, stagingBufferMemory);
+        createImage(scatter_texture_size, scatter_texture_size, scatter_texture_size, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, scatterImage, scatterImageMemory);
+        transitionImageLayout(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(stagingBuffer, scatterImage, scatter_texture_size, scatter_texture_size, scatter_texture_size);
+        transitionImageLayout(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
         vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
     }
@@ -1381,7 +1436,7 @@ private:
         endSingleTimeCommands(commandBuffer);
     }
 
-    void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
+    void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t depth) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
         VkBufferImageCopy region{};
         region.bufferOffset = 0;
@@ -1395,20 +1450,24 @@ private:
         region.imageExtent = {
             width,
             height,
-            1
+            depth
         };
         vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         endSingleTimeCommands(commandBuffer);
     }
 
-    void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+    void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
             VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        if (depth == 1) {
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        } else {
+            imageInfo.imageType = VK_IMAGE_TYPE_3D;
+        }
         imageInfo.extent.width = width;
         imageInfo.extent.height = height;
-        imageInfo.extent.depth = 1;
+        imageInfo.extent.depth = depth;
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
         imageInfo.format = format;
@@ -1435,14 +1494,22 @@ private:
     }
 
     void createTextureImageView() {
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+        terrainImageView = createImageView(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 2);
     }
 
-    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
+    void createScatterImageView() {
+        scatterImageView = createImageView(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 3);
+    }
+
+    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, int dimension) {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        if (dimension == 3) {
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        } else {
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        }
         viewInfo.format = format;
         viewInfo.subresourceRange.aspectMask = aspectFlags;
         viewInfo.subresourceRange.baseMipLevel = 0;
@@ -1456,7 +1523,7 @@ private:
         return imageView;
     }
 
-    void createTextureSampler() {
+    void createTerrainSampler() {
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -1476,7 +1543,32 @@ private:
         samplerInfo.mipLodBias = 0.0f;
         samplerInfo.minLod = 0.0f;
         samplerInfo.maxLod = 0.0f;
-        if (vkCreateSampler(logicalDevice, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+        if (vkCreateSampler(logicalDevice, &samplerInfo, nullptr, &terrainSampler) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create texture sampler!");
+        }
+    }
+
+    void createScatterSampler() {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(phyDevice, &properties);
+        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+        if (vkCreateSampler(logicalDevice, &samplerInfo, nullptr, &scatterSampler) != VK_SUCCESS) {
             throw std::runtime_error("failed to create texture sampler!");
         }
     }
@@ -1507,20 +1599,16 @@ private:
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[0].offset = offsetof(Vertex, pos);
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+        attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[1].offset = offsetof(Vertex, texCoord);
         return attributeDescriptions;
     }
 };

@@ -7,3 +7,4 @@ textures/
 *.jpg
 *.d
 *.o
+scatter_texture_*

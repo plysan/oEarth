@@ -40,7 +40,7 @@ void freeCamera(Camera &camera, GLFWwindow *window) {
     glfwGetWindowSize(window, &windowW, &windowH);
     glfwGetCursorPos(window, &xpos, &ypos);
     static float rotateFactor = 0.01f;
-    static float aceleration = 0.1f;
+    static float aceleration = 0.04f;
     float dx = (windowW/2 - xpos) * rotateFactor, dy = (windowH/2 - ypos) * rotateFactor;
     glm::vec3 up = glm::normalize(lvec3(camera.pos));
     camera.dir = glm::rotate(camera.dir, dx, up);
