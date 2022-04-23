@@ -16,9 +16,9 @@ struct DemSource {
 struct TriNode {
     bool is_pole;
     int level;
-    glm::vec3 vert_1;
-    glm::vec3 vert_2;
-    glm::vec3 vert_3;
+    glm::dvec3 vert_1;
+    glm::dvec3 vert_2;
+    glm::dvec3 vert_3;
     glm::vec2 tex_1;
     glm::vec2 tex_2;
     glm::vec2 tex_3;
@@ -28,14 +28,14 @@ struct TriNode {
 };
 
 class TetrahedraGlobe : public GlobeInfo {
-    glm::dvec3 cam_pos;
     DemSource dem_source;
     void upLevel(TriNode &node);
     void loadDem(DemSource &source);
     short readDem(DemSource &source, glm::vec2 &coord);
     void collect(TriNode& node);
 public:
-    void genGlobe(glm::dvec3 p_cam_pos);
+    glm::dvec3 camOffset;
+    void genGlobe(glm::dvec3 camPos);
 };
 
 #endif // TETRAHEDRAL_GLOBE_H

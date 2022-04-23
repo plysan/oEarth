@@ -13,6 +13,7 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    vec3 wordOffset;
     int target;
 } ubo;
 
@@ -22,7 +23,7 @@ layout(location = 5) out vec3 vertex_sun_dir_cs;
 
 float pi = 3.141592653589793;
 float atmosphere_radius_square = atmosphereTopRadius * atmosphereTopRadius;
-float scatter_height = (length((ubo.view * ubo.model * vec4(0.0, 0.0, 0.0, 1.0)).xyz) - earthRadius) / atmosphereThickness;
+float scatter_height = (length((ubo.view * vec4(-ubo.wordOffset, 1.0)).xyz) - earthRadius) / atmosphereThickness;
 float scatter_texture_size = scatterTextureSunAngleSize * scatterTextureHeightSize;
 float view_angle_factor = float(scatter_texture_size - 1) / scatter_texture_size;
 float scatter_texture_offset = 1.0 / (scatter_texture_size * 2);
@@ -32,7 +33,6 @@ float green_pow_coefficient = 1 / pow(greenAvgWlength/redAvgWlength, 4);
 float blue_pow_coefficient = 1 / pow(blueAvgWlength/redAvgWlength, 4);
 //TODO
 vec3 sun_ws = vec3(20000.0, 0.0, 0.0);
-vec3 vertex_offset_ws = vec3(0.0, 0.0, 0.0);
 
 
 vec4 getScatterAngles(vec3 up_n_cs, vec3 origin_vertex_dir_n_cs, vec3 sun_n_cs, float height_coord_linear, float height_sealevel){
@@ -83,7 +83,7 @@ void main() {
     vec3 origin_vertex_dir_n_cs = -normalize(vertex_origin_dir_cs);
     vec3 sun_n_cs = normalize(sun_cs);
 
-    vec3 sphereCenter_pos_cs = (ubo.view * vec4(-vertex_offset_ws,1)).xyz;
+    vec3 sphereCenter_pos_cs = (ubo.view * vec4(-ubo.wordOffset,1)).xyz;
     vec3 sphereCenter_vertex_cs = vertex_pos_cs - sphereCenter_pos_cs;
     float sphereCenter_vertex_length = length(sphereCenter_vertex_cs);
     vec3 sphereCenter_vertex_normal_cs = normalize(sphereCenter_vertex_cs);

@@ -39,6 +39,7 @@ struct FrameParam {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 proj;
+    glm::vec3 wordOffset;
     int target;
     union {
         VkDrawIndirectCommand terrainParam;
@@ -46,6 +47,7 @@ struct FrameParam {
     };
     int pad1;
     int pad2;
+    int pad3;
 };
 
 struct StagingBufferStruct {
@@ -144,7 +146,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(0.0f, 0.0f, 1.5f);
+    glm::vec3 initPos = coord2Pos(0.0f, 20.0f, 0.2f);
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f)
@@ -465,6 +467,7 @@ private:
         vkGetPhysicalDeviceProperties(lPhysicalDevice, &deviceProperties);
 
         VkDeviceSize ubAlign = deviceProperties.limits.minUniformBufferOffsetAlignment;
+        std::cout << "Frame param:" << sizeof(FrameParam) << ", align:" << ubAlign << '\n';
         assert(sizeof(FrameParam) % ubAlign == 0);
 
         VkPhysicalDeviceFeatures supportedFeatures;
@@ -1294,6 +1297,8 @@ private:
             copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * std::min((int)skyDome.vertices.size(), sbs.skyVertMax));
             copyBuffer(vertStagingBuffer, indexBuffer, sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax), 0, sizeof(int) * std::min((int)skyDome.indices.size(), sbs.skyIdxMax));
             std::cout << "Copy size: " << globe->vertices.size() << '\n';
+            fParams[0].wordOffset = globe->camOffset;
+            fParams[1].wordOffset = glm::vec3(0);
             inUpdate = true;
         }
         clock_t stamp4 = clock();
@@ -1309,19 +1314,19 @@ private:
         updateCamera(camera, window);
         //TODO
         fParams[0].target = 0;
-        glm::dvec3 dataOffset = glm::dvec3(0.0, 0.0, 0.0);
         fParams[0].model = glm::mat4(1.0f);
-        glm::vec3 cameraPos = lvec3(camera.pos - dataOffset);
-        fParams[0].view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
+        glm::vec3 camPos1 = lvec3(camera.pos);
+        glm::vec3 camPos0 = camPos1 - fParams[0].wordOffset;
+        fParams[0].view = glm::lookAt(camPos0, camPos0+camera.dir, camera.up);
         fParams[0].proj = camera.proj;
         fParams[0].terrainParam.vertexCount = sbs.terrainVertSize;
         fParams[0].terrainParam.instanceCount = 1;
         fParams[0].terrainParam.firstVertex = 0;
         fParams[0].terrainParam.firstInstance = 0;
         fParams[1].target = 1;
-        glm::mat4 skyRot = rotByLookAt(cameraPos);
+        glm::mat4 skyRot = rotByLookAt(camera.pos);
         fParams[1].model = skyRot;
-        fParams[1].view = glm::lookAt(cameraPos, cameraPos+camera.dir, camera.up);
+        fParams[1].view = glm::lookAt(camPos1, camPos1+camera.dir, camera.up);
         fParams[1].proj = camera.proj;
         fParams[1].skyParam.indexCount = sbs.skyIdxSize;
         fParams[1].skyParam.instanceCount = 1;

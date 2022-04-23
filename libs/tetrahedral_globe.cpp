@@ -15,7 +15,7 @@
 
 
 //TODO macro
-float getTexX(glm::vec3 &vert) {
+float getTexX(glm::dvec3 &vert) {
     float texX = glm::orientedAngle(glm::vec2(-1.0f, 0.0f), glm::normalize(glm::vec2(vert.x, vert.z))) / glm::pi<double>() / 2.0f;
     if (texX < 0) {
         texX += 1;
@@ -27,21 +27,21 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
     if (node.level > 12) {
         return;
     }
-    glm::vec3 mid_vert_1 = glm::normalize(node.vert_1 + node.vert_2);
-    glm::vec3 mid_vert_2 = glm::normalize(node.vert_2 + node.vert_3);
-    glm::vec3 mid_vert_3 = glm::normalize(node.vert_3 + node.vert_1);
-    glm::vec3 center_pos = glm::normalize(node.vert_1 + node.vert_2 + node.vert_3);
-    float cam_dist = glm::distance(center_pos, lvec3(cam_pos));
+    glm::dvec3 mid_vert_1 = glm::normalize(node.vert_1 + node.vert_2);
+    glm::dvec3 mid_vert_2 = glm::normalize(node.vert_2 + node.vert_3);
+    glm::dvec3 mid_vert_3 = glm::normalize(node.vert_3 + node.vert_1);
+    glm::dvec3 center_pos = glm::normalize(node.vert_1 + node.vert_2 + node.vert_3);
+    float cam_dist = glm::distance(center_pos, camOffset);
     float triangle_size = glm::length(node.vert_1 - node.vert_2);
     //std::cout << "cam dist: " << cam_dist << " tri_size: " << triangle_size << '\n';
-    //std::cout << "center: " << glm::to_string(center_pos) << " cam_pos: " << glm::to_string(cam_pos) << '\n';
+    //std::cout << "center: " << glm::to_string(center_pos) << " camOffset: " << glm::to_string(camOffset) << '\n';
     //TODO
     if (node.level > 2 && cam_dist > triangle_size && cam_dist/triangle_size > 30.0f) {
         return;
     }
     glm::vec2 mid_tex_1, mid_tex_2, mid_tex_3;
     mid_tex_2.x = getTexX(mid_vert_2);
-    mid_tex_2.y = glm::angle(mid_vert_2, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
+    mid_tex_2.y = glm::angle(mid_vert_2, glm::dvec3(0.0, -1.0, 0.0)) / glm::pi<double>();
     if (node.is_pole) {
         mid_tex_1.x = node.tex_2.x;
         mid_tex_1.y = (node.tex_1.y + node.tex_2.y) / 2.0f;
@@ -58,8 +58,8 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
         } else {
             mid_tex_3.x = getTexX(mid_vert_3);
         }
-        mid_tex_1.y = glm::angle(mid_vert_1, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
-        mid_tex_3.y = glm::angle(mid_vert_3, glm::vec3(0.0f, -1.0f, 0.0f)) / glm::pi<double>();
+        mid_tex_1.y = glm::angle(mid_vert_1, glm::dvec3(0.0, -1.0, 0.0)) / glm::pi<double>();
+        mid_tex_3.y = glm::angle(mid_vert_3, glm::dvec3(0.0, -1.0, 0.0)) / glm::pi<double>();
     }
 
     vert_cur += 12;
@@ -107,11 +107,11 @@ short TetrahedraGlobe::readDem(DemSource &source, glm::vec2 &coord) {
 }
 
 void TetrahedraGlobe::collect(TriNode& node) {
-    float hFactor = 6371000.0f;
+    double hFactor = 6371000.0;
     if (node.child.empty()) {
-        vertices.push_back({node.vert_1 * (float)((hFactor + readDem(dem_source, node.tex_1)) / hFactor), node.tex_1});
-        vertices.push_back({node.vert_2 * (float)((hFactor + readDem(dem_source, node.tex_2)) / hFactor), node.tex_2});
-        vertices.push_back({node.vert_3 * (float)((hFactor + readDem(dem_source, node.tex_3)) / hFactor), node.tex_3});
+        vertices.push_back({lvec3(node.vert_1 * ((hFactor + readDem(dem_source, node.tex_1)) / hFactor) - camOffset), node.tex_1});
+        vertices.push_back({lvec3(node.vert_2 * ((hFactor + readDem(dem_source, node.tex_2)) / hFactor) - camOffset), node.tex_2});
+        vertices.push_back({lvec3(node.vert_3 * ((hFactor + readDem(dem_source, node.tex_3)) / hFactor) - camOffset), node.tex_3});
         return;
     } else {
         for (auto &child_node : node.child) {
@@ -120,9 +120,9 @@ void TetrahedraGlobe::collect(TriNode& node) {
     }
 }
 
-void TetrahedraGlobe::genGlobe(glm::dvec3 p_cam_pos) {
+void TetrahedraGlobe::genGlobe(glm::dvec3 camPos) {
     vertices.clear();
-    cam_pos = p_cam_pos;
+    camOffset = camPos;
     clock_t begin = clock();
     TriNode root;
     root.parent = NULL;
@@ -141,14 +141,14 @@ void TetrahedraGlobe::genGlobe(glm::dvec3 p_cam_pos) {
     // North pole at (0, -1, 0)
     // lat:0;lng:0 at (1, 0, 0)
     std::vector<TriNode> nodes = {
-        {true, 0, {0.0f, -1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.125f, 0.0f}, {0.0f, 0.5f}, {0.25f, 0.5f}},
-        {true, 0, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}, {0.375f, 0.0f}, {0.25f, 0.5f}, {0.5f, 0.5f}},
-        {true, 0, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.625f, 0.0f}, {0.5f, 0.5f}, {0.75f, 0.5f}},
-        {true, 0, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {-1.0f, 0.0f, 0.0f}, {0.875f, 0.0f}, {0.75f, 0.5f}, {1.0f, 0.5f}},
-        {true, 0, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {-1.0f, 0.0f, 0.0f}, {0.125f, 1.0f}, {0.25f, 0.5f}, {0.0f, 0.5f}},
-        {true, 0, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, {0.375f, 1.0f}, {0.5f, 0.5f}, {0.25f, 0.5f}},
-        {true, 0, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.625f, 1.0f}, {0.75f, 0.5f}, {0.5f, 0.5f}},
-        {true, 0, {0.0f, 1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.875f, 1.0f}, {1.0f, 0.5f}, {0.75f, 0.5f}},
+        {true, 0, {0.0, -1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {0.125f, 0.0f}, {0.0f, 0.5f}, {0.25f, 0.5f}},
+        {true, 0, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}, {1.0, 0.0, 0.0}, {0.375f, 0.0f}, {0.25f, 0.5f}, {0.5f, 0.5f}},
+        {true, 0, {0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.625f, 0.0f}, {0.5f, 0.5f}, {0.75f, 0.5f}},
+        {true, 0, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}, {0.875f, 0.0f}, {0.75f, 0.5f}, {1.0f, 0.5f}},
+        {true, 0, {0.0, 1.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0}, {0.125f, 1.0f}, {0.25f, 0.5f}, {0.0f, 0.5f}},
+        {true, 0, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {0.375f, 1.0f}, {0.5f, 0.5f}, {0.25f, 0.5f}},
+        {true, 0, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}, {0.625f, 1.0f}, {0.75f, 0.5f}, {0.5f, 0.5f}},
+        {true, 0, {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {0.875f, 1.0f}, {1.0f, 0.5f}, {0.75f, 0.5f}},
     };
     vert_cur = 24;
     for (auto &node : nodes) {
