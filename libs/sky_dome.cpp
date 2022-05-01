@@ -11,14 +11,14 @@
 #include "sky_dome.h"
 #include "../vars.h"
 
-float integrantLengthCoefficient = 0.9f;
+float integrantLengthCoefficient = 0.95f;
 int integrantLengthInitChunks = 5;
-float integrantLengthMin = 0.00001f * earthRadius;
-float integrantLengthMax = 0.003f * earthRadius;
+float integrantLengthMin = 0.000005f * earthRadius;
+float integrantLengthMax = 0.002f * earthRadius;
 float height0Rayleigh = 7.994 * earthRadius / 6371;
 // decrease/increase to be more/less blue
 float opticalLengthCoefficient = 6.37f / earthRadius;
-float colorCiexyzClampCoefficient = 1.0/526.6095581;
+float colorCiexyzClampCoefficient = 1.0/532.6958008;
 float sunIntensity = 1000000.0f;
 float maxIntensityCiexyz = 0.0f;
 float minIntensitySrgb = 0.0f;
@@ -126,8 +126,9 @@ float integralOpticalLength(glm::vec3 scatterPos, glm::vec3 sunDirNormal, float 
 }
 
 glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVertical, float sunAngleHorizontal, bool debugColor) {
-    static float integralScatterOpticalLength[1024];
-    static float scatterPosCoefficients[1024];
+    static const int integral_max_steps = 2048;
+    static float integralScatterOpticalLength[integral_max_steps];
+    static float scatterPosCoefficients[integral_max_steps];
     float viewToScatterOpticalLength = 0.0f;
     glm::vec3 viewPos = coord2Pos(90.0f, 0.0f, height);
     glm::vec3 viewDirNormal = glm::normalize(coord2Pos(90.0f-viewAngle, 0.0f, 0.0f));
@@ -159,6 +160,7 @@ glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVert
         viewToScatterOpticalLength += integrantValue;
         lastScatterPosHeight = scatterPosHeight;
         lastScatterPosHeightCoefficient = scatterPosHeightCoefficient;
+        if (integralScatterOpticalLengthIdx >= integral_max_steps) throw std::runtime_error("integral max steps reached");
         integralScatterOpticalLength[integralScatterOpticalLengthIdx] = integralOpticalLength(scatterPos, sunDirNormal, viewToScatterOpticalLength);
         scatterPosCoefficients[integralScatterOpticalLengthIdx++] = integrantValue;
     }
@@ -224,7 +226,7 @@ void SkyDome::genSkyDome(glm::vec3 cameraPos) {
             glm::vec3 pos = coord2Pos(i*latInterval, j*lngInterval, atmosphereThickness);
             // north pole rotate to coord(0, 90) to align with glm view coordinate's original lookat direction
             pos = glm::rotate(pos, 90.0f/180.0f*glm::pi<float>(), glm::vec3(-1.0f, 0.0f, 0.0f));
-            vertices.push_back({pos, {0.0f, 0.0f}});
+            vertices.push_back({pos, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}});
         }
     }
     indices.clear();

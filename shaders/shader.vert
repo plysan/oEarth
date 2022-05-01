@@ -4,9 +4,11 @@
 #include "../vars.h"
 
 layout(location = 0) in vec3 inPosition;
-layout(location = 1) in vec2 inTexCoord;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inTexCoord;
 layout(location = 0) out vec2 fragTexCoord;
 layout(location = 1) out vec4 scatter_rgba;
+layout(location = 2) out float sun_proportion;
 layout(binding = 2) uniform sampler3D scatterSampler;
 
 layout(std140, binding = 0) uniform UniformBufferObject {
@@ -115,6 +117,9 @@ void main() {
         scatter_rgba.rgb /= scatter_rgba.a;
     }
     if (ubo.target == 0) {
+        sun_proportion = clamp(dot(sphereCenter_vertex_normal_cs, sun_n_cs), 0, 1);
+        sun_proportion *= sun_proportion;
+
         up_n_cs = sphereCenter_vertex_normal_cs;
         float height_sealevel = clamp(sphereCenter_vertex_length - earthRadius, 0, atmosphereThickness);
         height_coord_linear = height_sealevel/atmosphereThickness;

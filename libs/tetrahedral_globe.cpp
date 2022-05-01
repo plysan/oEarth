@@ -109,9 +109,16 @@ short TetrahedraGlobe::readDem(DemSource &source, glm::vec2 &coord) {
 void TetrahedraGlobe::collect(TriNode& node) {
     double hFactor = 6371000.0;
     if (node.child.empty()) {
-        vertices.push_back({lvec3(node.vert_1 * ((hFactor + readDem(dem_source, node.tex_1)) / hFactor) - camOffset), node.tex_1});
-        vertices.push_back({lvec3(node.vert_2 * ((hFactor + readDem(dem_source, node.tex_2)) / hFactor) - camOffset), node.tex_2});
-        vertices.push_back({lvec3(node.vert_3 * ((hFactor + readDem(dem_source, node.tex_3)) / hFactor) - camOffset), node.tex_3});
+        glm::vec3 normal = glm::normalize(glm::cross(node.vert_2 - node.vert_1, node.vert_3 - node.vert_1));
+        vertices.push_back({
+                lvec3(node.vert_1 * ((hFactor + readDem(dem_source, node.tex_1)) / hFactor) - camOffset),
+                normal, node.tex_1});
+        vertices.push_back({
+                lvec3(node.vert_2 * ((hFactor + readDem(dem_source, node.tex_2)) / hFactor) - camOffset),
+                normal, node.tex_2});
+        vertices.push_back({
+                lvec3(node.vert_3 * ((hFactor + readDem(dem_source, node.tex_3)) / hFactor) - camOffset),
+                normal, node.tex_3});
         return;
     } else {
         for (auto &child_node : node.child) {
