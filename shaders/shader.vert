@@ -113,9 +113,6 @@ void main() {
     scatter_rgba = scatter_rgba_first;
     scatter_rgba = clamp(scatter_rgba, vec4(0), vec4(1));
     scatter_rgba.a = max(scatter_rgba.r, max(scatter_rgba.g, scatter_rgba.b));
-    if (scatter_rgba.a > 0) {
-        scatter_rgba.rgb /= scatter_rgba.a;
-    }
     if (ubo.target == 0) {
         sun_proportion = clamp(dot(sphereCenter_vertex_normal_cs, sun_n_cs), 0, 1);
         sun_proportion *= sun_proportion;
@@ -131,8 +128,5 @@ void main() {
                                         scatter_rgba_second.b * pow(first_second_optical_depth, blue_pow_coefficient));
         scatter_rgba.rgb = clamp(scatter_rgba_first.rgb - scatter_rgba_offset, vec3(0), vec3(1));
         scatter_rgba.a = clamp(max(scatter_rgba.r, max(scatter_rgba.g, scatter_rgba.b)), 0, 1);
-        if(scatter_rgba.a > 0) {
-            scatter_rgba.rgb /= scatter_rgba.a;
-        }
     }
 }

@@ -29,7 +29,7 @@ struct Camera {
 struct GlobeInfo {
     std::vector<Vertex> vertices;
     int vert_cur;
-    TextureSource texture;
+    TextureSource mega_texture;
     virtual void genGlobe(glm::dvec3 p_cam_pos) = 0;
 };
 

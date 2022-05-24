@@ -18,8 +18,8 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     if (ubo.target == 1) {
-        outColor.rgb = scatter_rgba.rgb * scatter_rgba.a;
+        outColor.rgb = scatter_rgba.rgb;
     } else {
-        outColor.rgb = scatter_rgba.rgb * scatter_rgba.a + (1 - scatter_rgba.a) * texture(texSampler, fragTexCoord).rgb * sun_proportion;
+        outColor.rgb = scatter_rgba.rgb + (1 - scatter_rgba.a) * texture(texSampler, fragTexCoord).rgb * sun_proportion;
     }
 }

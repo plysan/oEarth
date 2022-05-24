@@ -25,11 +25,15 @@ $(DIR_EXT_LIBS)/stb_image.h:
 	wget https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -P $(DIR_EXT_LIBS)
 	touch $@
 
+$(DIR_EXT_LIBS)/stb_image_write.h:
+	wget https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -P $(DIR_EXT_LIBS)
+	touch $@
+
 $(DIR_TEXTURES)/texture.jpg:
 	wget https://vulkan-tutorial.com/images/texture.jpg -P $(DIR_TEXTURES)
 	touch $@
 
-compile_main: $(DEP) $(OBJ) $(DIR_EXT_LIBS)/stb_image.h
+compile_main: $(DIR_EXT_LIBS)/stb_image.h $(DIR_EXT_LIBS)/stb_image_write.h $(DEP) $(OBJ)
 	@$(CC) $(CXXFLAGS) $(LDFLAGS) -o main $(OBJ)
 
 ifneq ($(filter clean,$(MAKECMDGOALS)),clean)
