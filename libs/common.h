@@ -11,10 +11,13 @@ struct Vertex {
     glm::vec2 texCoord;
 };
 
-struct TextureSource {
-    unsigned char *data;
+struct ImageSource {
+    char *data;
     int w;
     int h;
+    int comp;
+    glm::dvec2 tl_coord;
+    double span;
 };
 
 struct Camera {
@@ -28,8 +31,7 @@ struct Camera {
 
 struct GlobeInfo {
     std::vector<Vertex> vertices;
-    int vert_cur;
-    TextureSource mega_texture;
+    ImageSource mega_texture;
     virtual void genGlobe(glm::dvec3 p_cam_pos) = 0;
 };
 

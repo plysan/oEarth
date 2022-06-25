@@ -246,7 +246,7 @@ void SkyDome::genSkyDome(glm::vec3 cameraPos) {
 
 void SkyDome::genScatterTexure() {
     int scatterTextureSize = scatterTextureSunAngleSize*scatterTextureHeightSize;
-    scatterTexture.data = new unsigned char[(int)pow(scatterTextureSize, 3) * 4];
+    scatterTexture.data = new char[(int)pow(scatterTextureSize, 3) * 4];
     glm::detail::uint32* scatterTextureArrayData = (glm::detail::uint32*)scatterTexture.data;
 
     int textureSizeExp2 = pow(scatterTextureSunAngleSize*scatterTextureHeightSize, 2);

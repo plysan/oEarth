@@ -3,19 +3,11 @@
 
 #include "common.h"
 
-struct DemSource {
-    glm::vec2 mid_coord;
-    glm::vec2 rad;
-    int16_t *data;
-    int w;
-    int h;
-    long length;
-};
-
 // start from tip, counter clock wise
 struct TriNode {
     bool is_pole;
     int level;
+    ImageSource *dem_source;
     glm::dvec3 vert_1;
     glm::dvec3 vert_2;
     glm::dvec3 vert_3;
@@ -27,17 +19,12 @@ struct TriNode {
     glm::vec2 tex_3;
     std::vector<TriNode> child;
     TriNode *parent;
-    DemSource *dem;
-    //TextureNode *texture_node;
     std::string tex_source_0;
     std::string tex_source_1;
 };
 
 class TetrahedraGlobe : public GlobeInfo {
-    DemSource dem_source;
     void upLevel(TriNode &node);
-    void loadDem(DemSource &source);
-    short readDem(DemSource &source, glm::dvec2 &coord);
     void collect(TriNode& node);
     void setTexLayout(std::vector<TriNode> &nodes);
 public:

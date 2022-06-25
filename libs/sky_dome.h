@@ -7,7 +7,7 @@
 struct SkyDome {
     std::vector<Vertex> vertices;
     std::vector<int> indices;
-    TextureSource scatterTexture;
+    ImageSource scatterTexture;
     void genSkyDome(glm::vec3 cameraPos);
     void genScatterTexure();
 };

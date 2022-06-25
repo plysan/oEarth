@@ -149,7 +149,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(45.0f, 0.0f, 0.0001f);
+    glm::vec3 initPos = coord2Pos(45.0f, 0.0f, 0.00001f);
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f)
@@ -997,7 +997,7 @@ private:
         while (true) {
             if (inUpdate) {
                 double distanceMoved = glm::distance(lastCameraPos, camera.pos);
-                if (distanceMoved > 0.011) {
+                if (distanceMoved > 0.001) {
                     lastCameraPos = camera.pos;
                     globe->genGlobe(lastCameraPos);
                     skyDome.genSkyDome(lastCameraPos);
