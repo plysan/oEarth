@@ -1,4 +1,12 @@
 //define variables used in both cpu and gpu
+
+#ifndef VARS_H
+#define VARS_H
+
+const int TARGET_TERRAIN = 0;
+const int TARGET_SKY = 1;
+const int TARGET_WATER = 2;
+
 const float earthRadius = 1.0f;
 const float atmosphereTopRadius = 1.011f;
 const float atmosphereThickness = atmosphereTopRadius - earthRadius;
@@ -9,3 +17,5 @@ const float colorSrgbCoefficient = 0.7904051;
 const float redAvgWlength = 0.685;
 const float greenAvgWlength = 0.5325;
 const float blueAvgWlength = 0.4725;
+
+#endif // VARS_H

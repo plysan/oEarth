@@ -25,6 +25,8 @@
 #include "utils/coord.h"
 #include "utils/vulkan_utils.h"
 #include "libs/common.h"
+#include "libs/camera.h"
+#include "libs/water.h"
 #include "libs/tetrahedral_globe.h"
 #include "libs/sky_dome.h"
 #include "vars.h"
@@ -40,23 +42,30 @@ struct FrameParam {
     glm::mat4 model;
     glm::mat4 view;
     glm::mat4 proj;
+    glm::mat4 p_inv;
+    glm::mat4 v_inv;
     glm::vec3 wordOffset;
     int target;
+    float height;
     union {
         VkDrawIndirectCommand terrainParam;
         VkDrawIndexedIndirectCommand skyParam;
+        VkDrawIndexedIndirectCommand water_param;
     };
     int pad1;
     int pad2;
-    int pad3;
 };
 
 struct StagingBufferStruct {
+    // | terrain_vert | sky_vert | sky_idx | water_vert | water_idx |
     int terrainVertMax;
     int terrainVertSize;
     int skyVertMax;
     int skyIdxMax;
     int skyIdxSize;
+    int water_vert_max;
+    int water_idx_max;
+    int water_idx_size;
 };
 
 class VKDemo {
@@ -125,8 +134,9 @@ private:
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
-    TetrahedraGlobe *globe;
+    TetrahedraGlobe globe{};
     SkyDome skyDome;
+    WaterGrid water_grid;
     VkBuffer vertStagingBuffer;
     VkDeviceMemory vertStagingBufferMemory;
     VkBuffer terrainImageBuf;
@@ -149,14 +159,15 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> descriptorSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(45.0f, 0.0f, 0.00001f);
+    glm::vec3 initPos = coord2Pos(42.226f, 3.147f, 0.00001f);
     Camera camera{
         .pos = initPos,
-        .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f)
+        .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f),
+        .fov = 45.0f
     };
     glm::dvec3 lastCameraPos;
     bool inUpdate = false;
-    FrameParam fParams[2];
+    FrameParam fParams[3];
 
     void initWindow() {
         glfwInit();
@@ -978,15 +989,18 @@ private:
         sbs.terrainVertMax = 500000;
         sbs.skyVertMax = 25000;
         sbs.skyIdxMax = 25000;
-        globe = new TetrahedraGlobe();
+        sbs.water_vert_max = 75000;
+        sbs.water_idx_max = 75000;
         lastCameraPos = camera.pos;
-        globe->genGlobe(lastCameraPos);
-        sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe->vertices.size());
+        globe.genGlobe(lastCameraPos);
+        sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
         skyDome.genSkyDome(lastCameraPos);
         sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
+        water_grid.genWaterGrid(136, 76);
+        sbs.water_idx_size = std::min(sbs.water_vert_max, (int)water_grid.indices.size());
         createTerrainImage(globe);
         createVertBuffers();
-        stageVertBuffers();
+        stageVertBuffers(true);
         skyDome.genScatterTexure();
         uint32_t scatter_texture_size = scatterTextureSunAngleSize * scatterTextureHeightSize;
         createStaticImage4(scatter_texture_size, scatter_texture_size, scatter_texture_size, skyDome.scatterTexture.data,
@@ -999,11 +1013,11 @@ private:
                 double distanceMoved = glm::distance(lastCameraPos, camera.pos);
                 if (distanceMoved > 0.001) {
                     lastCameraPos = camera.pos;
-                    globe->genGlobe(lastCameraPos);
+                    globe.genGlobe(lastCameraPos);
                     skyDome.genSkyDome(lastCameraPos);
-                    stageVertBuffers();
+                    stageVertBuffers(false);
                     //TODO atomic
-                    sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe->vertices.size());
+                    sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
                     sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
                     inUpdate = false;
                 }
@@ -1012,30 +1026,37 @@ private:
         }
     }
 
-    void stageVertBuffers() {
+    void stageVertBuffers(bool stage_water) {
         void* data;
         vkMapMemory(logicalDevice, vertStagingBufferMemory, 0, VK_WHOLE_SIZE, 0, &data);
-        memcpy(data, globe->vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.terrainVertMax, (int)globe->vertices.size())));
-        memcpy((char*)data + sizeof(Vertex) * sbs.terrainVertMax, skyDome.vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.skyVertMax, (int)skyDome.vertices.size())));
-        memcpy((char*)data + sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyIdxMax), skyDome.indices.data(), (size_t)(sizeof(int) * std::min(sbs.skyIdxMax, (int)skyDome.indices.size())));
+        memcpy(data, globe.vertices.data(), (size_t)(sizeof(Vertex) * std::min(sbs.terrainVertMax, (int)globe.vertices.size())));
+        memcpy((char*)data + sizeof(Vertex) * sbs.terrainVertMax, skyDome.vertices.data(),
+                (size_t)(sizeof(Vertex) * std::min(sbs.skyVertMax, (int)skyDome.vertices.size())));
+        memcpy((char*)data + sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax), skyDome.indices.data(),
+                (size_t)(sizeof(int) * std::min(sbs.skyIdxMax, (int)skyDome.indices.size())));
+        if (stage_water) {
+            memcpy((char*)data + sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax) + sizeof(int) * sbs.skyIdxMax, water_grid.vertices.data(),
+                    (size_t)(sizeof(Vertex) * std::min(sbs.water_vert_max, (int)water_grid.vertices.size())));
+            memcpy((char*)data + sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax + sbs.water_vert_max) + sizeof(int) * sbs.skyIdxMax, water_grid.indices.data(),
+                    (size_t)(sizeof(int) * std::min(sbs.water_idx_max, (int)water_grid.indices.size())));
+        }
         vkUnmapMemory(logicalDevice, vertStagingBufferMemory);
         vkMapMemory(logicalDevice, terrainImageSBM, 0, VK_WHOLE_SIZE, 0, &data);
-        memcpy((char*)data, globe->mega_texture.data, (size_t)(globe->mega_texture.w * globe->mega_texture.h * 4));
+        memcpy((char*)data, globe.mega_texture.data, (size_t)(globe.mega_texture.w * globe.mega_texture.h * 4));
         vkUnmapMemory(logicalDevice, terrainImageSBM);
     }
 
     void createVertBuffers() {
-        std::cout << "Init vertex count: globe: " << globe->vertices.size() << " sky: " << skyDome.vertices.size() << '\n';
-        VkDeviceSize vertBufferSize = sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax);
+        std::cout << "Init vertex count: globe: " << globe.vertices.size() << " sky: " << skyDome.vertices.size() << '\n';
+        VkDeviceSize vertBufferSize = sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax + sbs.water_vert_max + sbs.water_idx_max);
         std::cout << "Allocate vertex size: " << sizeof(Vertex) << " x " << (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax) << " = " << vertBufferSize << '\n';
         createBuffer(vertBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 vertStagingBuffer, vertStagingBufferMemory, logicalDevice, phyDevice);
-        // ????????
         createBuffer(vertBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory, logicalDevice, phyDevice);
-        VkDeviceSize indexBufferSize = sizeof(int) * sbs.skyIdxMax;
+        VkDeviceSize indexBufferSize = sizeof(int) * (sbs.skyIdxMax + sbs.water_idx_max);
         std::cout << "Allocate index size: " << sizeof(int) << " x " << sbs.skyIdxMax << " = " << indexBufferSize << '\n';
         createBuffer(indexBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -1055,7 +1076,7 @@ private:
     void createUniformBuffers() {
         //TODO
         VkDeviceSize bufferSize = sizeof(FrameParam);
-        bufferSize = sizeof(FrameParam) * 2;
+        bufferSize = sizeof(FrameParam) * 3;
         uniformBuffers.resize(swapChainImages.size());
         uniformBuffersData.resize(swapChainImages.size());
         uniformBuffersMemory.resize(swapChainImages.size());
@@ -1151,7 +1172,7 @@ private:
         for (size_t i = 0; i < commandBuffers.size(); i++) {
             VkCommandBufferBeginInfo beginInfo{};
             beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = 0; // Optional
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
             beginInfo.pInheritanceInfo = nullptr; // Optional
             if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS) {
                 throw std::runtime_error("failed to begin recording command buffer!");
@@ -1183,6 +1204,10 @@ private:
             VkDeviceSize skyOffset = dynamicOffset + offsetof(struct FrameParam, skyParam);
             //TODO
             vkCmdDrawIndexedIndirect(commandBuffers[i], uniformBuffers[i], skyOffset, 1, 0);
+            dynamicOffset += sizeof(FrameParam);
+            vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[i], 1, &dynamicOffset);
+            VkDeviceSize water_offset = dynamicOffset + offsetof(struct FrameParam, water_param);
+            vkCmdDrawIndexedIndirect(commandBuffers[i], uniformBuffers[i], water_offset, 1, 0);
             vkCmdEndRenderPass(commandBuffers[i]);
             if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to record command buffer!");
@@ -1194,15 +1219,25 @@ private:
         static double maxCost = 0.0;
         clock_t stamp1 = clock();
         if (!inUpdate) {
-            copyBuffer(vertStagingBuffer, vertexBuffer, 0, 0, sizeof(Vertex) * std::min((int)globe->vertices.size(), sbs.terrainVertMax));
-            copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * std::min((int)skyDome.vertices.size(), sbs.skyVertMax));
+            copyBuffer(vertStagingBuffer, vertexBuffer, 0, 0, sizeof(Vertex) * std::min((int)globe.vertices.size(), sbs.terrainVertMax));
+            copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * sbs.terrainVertMax,
+                    sizeof(Vertex) * std::min((int)skyDome.vertices.size(), sbs.skyVertMax));
             copyBuffer(vertStagingBuffer, indexBuffer, sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax), 0, sizeof(int) * std::min((int)skyDome.indices.size(), sbs.skyIdxMax));
+            static bool copy_water = true;
+            if (copy_water) {
+                copy_water = false;
+                copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax) + sizeof(int) * sbs.skyIdxMax,
+                        sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax), sizeof(Vertex) * std::min((int)water_grid.vertices.size(), sbs.water_vert_max));
+                copyBuffer(vertStagingBuffer, indexBuffer, sizeof(Vertex) * (sbs.terrainVertMax + sbs.skyVertMax + sbs.water_vert_max) + sizeof(int) * sbs.skyIdxMax,
+                        sizeof(int) * sbs.skyIdxMax, sizeof(int) * std::min((int)water_grid.indices.size(), sbs.water_idx_max));
+            }
             transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, logicalDevice, graphicsQueue, commandPool);
-            copyBufferToImage(terrainImageBuf, terrainImage, globe->mega_texture.w, globe->mega_texture.h, 1, logicalDevice, graphicsQueue, commandPool);
+            copyBufferToImage(terrainImageBuf, terrainImage, globe.mega_texture.w, globe.mega_texture.h, 1, logicalDevice, graphicsQueue, commandPool);
             transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, logicalDevice, graphicsQueue, commandPool);
-            std::cout << "Copy size: " << globe->vertices.size() << '\n';
-            fParams[0].wordOffset = globe->camOffset;
+            std::cout << "Copy size: " << globe.vertices.size() << '\n';
+            fParams[0].wordOffset = globe.camOffset;
             fParams[1].wordOffset = glm::vec3(0);
+            fParams[2].wordOffset = globe.camOffset;
             inUpdate = true;
         }
         vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
@@ -1273,19 +1308,19 @@ private:
         camera.aspect = swapChainExtent.width / (float) swapChainExtent.height;
         updateCamera(camera, window);
         //TODO
-        fParams[0].target = 0;
+        fParams[0].target = TARGET_TERRAIN;
         fParams[0].model = glm::mat4(1.0f);
-        glm::vec3 camPos1 = lvec3(camera.pos);
-        glm::vec3 camPos0 = camPos1 - fParams[0].wordOffset;
+        glm::vec3 camPos0 = lvec3(camera.pos - hvec3(fParams[0].wordOffset));
         fParams[0].view = glm::lookAt(camPos0, camPos0+camera.dir, camera.up);
         fParams[0].proj = camera.proj;
         fParams[0].terrainParam.vertexCount = sbs.terrainVertSize;
         fParams[0].terrainParam.instanceCount = 1;
         fParams[0].terrainParam.firstVertex = 0;
         fParams[0].terrainParam.firstInstance = 0;
-        fParams[1].target = 1;
+        fParams[1].target = TARGET_SKY;
         glm::mat4 skyRot = rotByLookAt(camera.pos);
         fParams[1].model = skyRot;
+        glm::vec3 camPos1 = lvec3(camera.pos);
         fParams[1].view = glm::lookAt(camPos1, camPos1+camera.dir, camera.up);
         fParams[1].proj = camera.proj;
         fParams[1].skyParam.indexCount = sbs.skyIdxSize;
@@ -1293,7 +1328,17 @@ private:
         fParams[1].skyParam.firstIndex = 0;
         fParams[1].skyParam.vertexOffset = sbs.terrainVertMax;
         fParams[1].skyParam.firstInstance = 0;
-        memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 2);
+        fParams[2].target = TARGET_WATER;
+        fParams[2].model = glm::mat4(1.0f);
+        fParams[2].view = fParams[0].view;
+        fParams[2].proj = camera.proj;
+        camera.getPVInv(fParams[2].height, fParams[2].p_inv, fParams[2].v_inv, fParams[0].wordOffset);
+        fParams[2].water_param.indexCount = sbs.water_idx_size;
+        fParams[2].water_param.instanceCount = 1;
+        fParams[2].water_param.firstIndex = sbs.skyIdxMax;
+        fParams[2].water_param.vertexOffset = sbs.terrainVertMax + sbs.skyVertMax;
+        fParams[2].water_param.firstInstance = 0;
+        memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 3);
     }
 
     void createSyncObjects() {
@@ -1317,9 +1362,9 @@ private:
     }
 
     // RGBA
-    void createTerrainImage(GlobeInfo *globe) {
-        uint32_t imageW = globe->mega_texture.w;
-        uint32_t imageH = globe->mega_texture.h;
+    void createTerrainImage(TetrahedraGlobe &globe) {
+        uint32_t imageW = globe.mega_texture.w;
+        uint32_t imageH = globe.mega_texture.h;
         VkDeviceSize imageSize = imageW * imageH * 4;
 
         createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,

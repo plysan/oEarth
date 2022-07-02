@@ -15,8 +15,11 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
-    vec3 wordOffset;
+    mat4 p_inv;
+    mat4 v_inv;
+    vec3 wordOffset; // from earth center
     int target;
+    float height;
 } ubo;
 
 layout(location = 3) out vec3 vertex_ws;
@@ -66,9 +69,58 @@ vec4 texture4D(vec4 scatter_params)
     return result;
 }
 
+void handle_water() {
+    vec3 cam_vertex_dir = normalize((ubo.v_inv * vec4((ubo.p_inv * vec4(inPosition, 1)).xyz, 0)).xyz);
+    vec3 cam_inv = (ubo.v_inv * vec4(0,0,0,1)).xyz;
+    vec3 cam_earthCenter_dir = normalize(-ubo.wordOffset - cam_inv);
+    float cos_b = dot(cam_earthCenter_dir, cam_vertex_dir);
+    if (cos_b < 0) {
+        gl_Position = ubo.proj * ubo.view * ubo.model * vec4(cam_earthCenter_dir, 1);
+        return;
+    }
+    float sin_b = sqrt(1 - pow(cos_b, 2));
+    float cot_b = cos_b / sin_b;
+    float horizon_len = ubo.height / cot_b;
+    float cam_vertex_length;
+    if (horizon_len < 0.01) {
+        if (horizon_len < 0.0002) {
+            cam_vertex_length = ubo.height / cos_b;
+        } else {
+            float x = sqrt(pow(cot_b, 2) - 2 * ubo.height) - cot_b; // approximate using y=-x^2/2
+            cam_vertex_length = length(vec2(0, ubo.height) - vec2(x, 1 - cosh(x)));
+        }
+    } else {
+        float d = earthRadius / sin_b;
+        float sin_a = (earthRadius + ubo.height) / d;
+        float cos_a = -sqrt(1 - pow(sin_a, 2));
+        cam_vertex_length = (earthRadius + ubo.height) * cos_b + earthRadius * cos_a;
+    }
+    vec3 surface_pos_ms = cam_inv + cam_vertex_dir * cam_vertex_length;
+
+    vec3 surface_pos_earth = surface_pos_ms + ubo.wordOffset;
+    float radius_xz = sqrt(pow(surface_pos_earth.x, 2) + pow(surface_pos_earth.z, 2));
+    float lat = atan(surface_pos_earth.y/radius_xz);
+    float lng = -atan(surface_pos_earth.z/surface_pos_earth.x);
+    if (surface_pos_earth.x < 0.0f) {
+        if (lng < 0.0f) {
+            lng += pi;
+        } else {
+            lng -= pi;
+        }
+    }
+    vec2 water_origin_coord = vec2(0);
+    fragTexCoord = vec2(lat - water_origin_coord.x, lng - water_origin_coord.y) * 900;
+    float water_height = 0;
+    gl_Position = ubo.proj * ubo.view * ubo.model * vec4((surface_pos_ms - cam_earthCenter_dir * 0.0001 * water_height), 1);
+}
+
 void main() {
+    if (ubo.target == TARGET_WATER) {
+        handle_water();
+        return;
+    }
     gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
-    if (ubo.target == 0) {
+    if (ubo.target == TARGET_TERRAIN) {
         fragTexCoord = inTexCoord;
     }
 
@@ -95,11 +147,11 @@ void main() {
         float viewer_vertex_sphereCenter_cos = dot(normalize(-sphereCenter_vertex_cs), -normalize(vertex_pos_cs));
         float viewer_vertex_sphereCenter_acos = acos(viewer_vertex_sphereCenter_cos);
         float vertex_pos_length = length(vertex_pos_cs);
-        if (ubo.target == 1) {
+        if (ubo.target == TARGET_SKY) {
             float vertex_sphereCenter_intersec_cos = cos(pi - 2 * viewer_vertex_sphereCenter_acos);
             float camera_offset = vertex_pos_length - sqrt(2 * atmosphere_radius_square * (1 - vertex_sphereCenter_intersec_cos));
             up_n_cs = normalize(vertex_pos_normal_cs * camera_offset - sphereCenter_pos_cs);
-        } else if (ubo.target == 0) {
+        } else if (ubo.target == TARGET_TERRAIN) {
             float vertex_atmosTopIntersect_sphereCenter_angle = asin(sphereCenter_vertex_length*sin(viewer_vertex_sphereCenter_acos)/atmosphereTopRadius);
             float camera_offset = vertex_pos_length - sqrt(pow(sphereCenter_vertex_length, 2) + pow(atmosphereTopRadius, 2)
                 - 2*atmosphereTopRadius*sphereCenter_vertex_length*cos(pi-vertex_atmosTopIntersect_sphereCenter_angle-viewer_vertex_sphereCenter_acos));
@@ -113,7 +165,7 @@ void main() {
     scatter_rgba = scatter_rgba_first;
     scatter_rgba = clamp(scatter_rgba, vec4(0), vec4(1));
     scatter_rgba.a = max(scatter_rgba.r, max(scatter_rgba.g, scatter_rgba.b));
-    if (ubo.target == 0) {
+    if (ubo.target == TARGET_TERRAIN) {
         sun_proportion = clamp(dot(sphereCenter_vertex_normal_cs, sun_n_cs), 0, 1);
         sun_proportion *= sun_proportion;
 

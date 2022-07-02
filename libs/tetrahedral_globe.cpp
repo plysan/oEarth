@@ -25,7 +25,7 @@ bool debug_dem = false;
 const std::string IMG_JPG = ".jpg";
 const std::string IMG_TIF = ".tif";
 
-static std::map<std::string, ImageSource> image_cache;
+static std::map<std::string, ImageSource*> image_cache;
 static std::vector<TriNode*> texture_nodes;
 
 //TODO macro
@@ -72,8 +72,9 @@ inline bool ends_with(std::string const &value, std::string const &ending)
     return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
 }
 
-ImageSource* getImgSource(std::string &key) {
+ImageSource* getImgSource(std::string &key, bool *exist) {
     if (image_cache.find(key) == image_cache.end()) {
+        if (exist != NULL) *exist = false;
         ImageSource *source = new ImageSource();
         if (ends_with(key, IMG_TIF)) {
             loadDem(key, *source);
@@ -84,10 +85,11 @@ ImageSource* getImgSource(std::string &key) {
         if (source->data == NULL) {
             throw std::runtime_error("error reading image source");
         }
-        image_cache[key] = *source;
+        image_cache[key] = source;
         return source;
     }
-    return &image_cache.find(key)->second;
+    if (exist != NULL) *exist = true;
+    return image_cache.find(key)->second;
 }
 
 void fillSubTex(TriNode &node) {
@@ -139,11 +141,21 @@ bool testImageSource(int level, double lat, double lng, std::string &file_name, 
     return false;
 }
 
-float readDem(ImageSource *source, glm::dvec2 &coord) {
-    uint16_t x = (uint16_t)((coord.y - source->tl_coord.y) / source->span * (source->w - 1));
-    uint16_t y = (uint16_t)((-coord.x + source->tl_coord.x) / source->span * (source->h - 1));
-    float* data = (float*)source->data;
-    return data[source->w * y + x];
+float getNodeHeight(TriNode &node, glm::dvec2 &coord) {
+    static double earth_r_meter = 6371000.0;
+    ImageSource *source = NULL;
+    if (node.dem_source_1 != NULL && node.dem_source_1->tl_coord.y < coord.y) {
+        source = node.dem_source_1;
+    } else if (node.dem_source_0 != NULL) {
+        source = node.dem_source_0;
+    }
+    if (source != NULL) {
+        uint16_t x = (uint16_t)((coord.y - source->tl_coord.y) / source->span.y * (source->w - 1));
+        uint16_t y = (uint16_t)((-coord.x + source->tl_coord.x) / source->span.x * (source->h - 1));
+        float* data = (float*)source->data;
+        return data[source->w * y + x] / earth_r_meter;
+    }
+    return 0.0f;
 }
 
 void TetrahedraGlobe::upLevel(TriNode &node) {
@@ -161,20 +173,33 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
     double node_span_lng = node.coord_2.y - node.coord_3.y;
     double node_start_lat = node_span_lat > 0 ? node.coord_1.x : node.coord_2.x;
     double node_start_lng = node_span_lng > 0 ? node.coord_3.y : node.coord_2.y;
+    bool span_node = abs(node_span_lng / node_span_lat) > 1.1;
+    float dem_span_lat = abs(node_span_lat);
+    float dem_span_lng = span_node ? abs(node_span_lng / 2) : abs(node_span_lng);
 
-    std::string dem_source_key;
-    bool dem_exists = testImageSource(node.level, node_start_lat, node_start_lng, dem_source_key, IMG_TIF);
-    if (dem_exists) {
-        node.dem_source = getImgSource(dem_source_key);
-        if (node.dem_source->span == 0.0) {
-            node.dem_source->tl_coord = glm::dvec2(node_start_lat, node_start_lng);
-            node.dem_source->span = 180.0 / pow(2, node.level);
+    std::string dem_source_key_0, dem_source_key_1;
+    bool file_exists, exist;
+    file_exists = testImageSource(node.level, node_start_lat, node_start_lng, dem_source_key_0, IMG_TIF);
+    if (span_node) {
+        file_exists &= testImageSource(node.level, node_start_lat, node_start_lng + dem_span_lng, dem_source_key_1, IMG_TIF);
+    }
+    if(file_exists) {
+        node.dem_source_0 = getImgSource(dem_source_key_0, &exist);
+        if (!exist) {
+            node.dem_source_0->tl_coord = glm::vec2(node_start_lat, node_start_lng);
+            node.dem_source_0->span = glm::vec2(dem_span_lat, dem_span_lng);
+        }
+        if (span_node) {
+            node.dem_source_1 = getImgSource(dem_source_key_1, &exist);
+            if (!exist) {
+                node.dem_source_1->tl_coord = glm::vec2(node_start_lat, node_start_lng + dem_span_lng);
+                node.dem_source_1->span = glm::vec2(dem_span_lat, dem_span_lng);
+            }
         }
     }
 
     std::string source0, source1;
-    bool file_exists = testImageSource(node.level, node_start_lat, node_start_lng, source0, IMG_JPG);
-    bool span_node = abs(node_span_lng / node_span_lat) > 1.1;
+    file_exists = testImageSource(node.level, node_start_lat, node_start_lng, source0, IMG_JPG);
     if (span_node) {
         file_exists &= testImageSource(node.level, node_start_lat, node_start_lng + abs(node_span_lng / 2), source1, IMG_JPG);
     }
@@ -193,28 +218,20 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
         mid_coord_1 = (node.coord_1 + node.coord_2) / 2.0;
         mid_coord_3 = (node.coord_3 + node.coord_1) / 2.0;
     }
-    glm::dvec3 mid_vert_1, mid_vert_2, mid_vert_3;
-    static double hFactor = 6371000.0;
-    if (node.dem_source == NULL) {
-        mid_vert_1 = coord2DPos(mid_coord_1.x, mid_coord_1.y, 0.0f);
-        mid_vert_2 = coord2DPos(mid_coord_2.x, mid_coord_2.y, 0.0f);
-        mid_vert_3 = coord2DPos(mid_coord_3.x, mid_coord_3.y, 0.0f);
-    } else {
-        mid_vert_1 = coord2DPos(mid_coord_1.x, mid_coord_1.y, readDem(node.dem_source, mid_coord_1) / hFactor);
-        mid_vert_2 = coord2DPos(mid_coord_2.x, mid_coord_2.y, readDem(node.dem_source, mid_coord_2) / hFactor);
-        mid_vert_3 = coord2DPos(mid_coord_3.x, mid_coord_3.y, readDem(node.dem_source, mid_coord_3) / hFactor);
-    }
+    glm::dvec3 mid_vert_1 = coord2DPos(mid_coord_1.x, mid_coord_1.y, getNodeHeight(node, mid_coord_1));
+    glm::dvec3 mid_vert_2 = coord2DPos(mid_coord_2.x, mid_coord_2.y, getNodeHeight(node, mid_coord_2));
+    glm::dvec3 mid_vert_3 = coord2DPos(mid_coord_3.x, mid_coord_3.y, getNodeHeight(node, mid_coord_3));
 
-    node.child.push_back({node.is_pole ? true : false, node.level + 1, node.dem_source,
+    node.child.push_back({node.is_pole ? true : false, node.level + 1, node.dem_source_0, node.dem_source_1,
             node.vert_1, mid_vert_1, mid_vert_3,
             node.coord_1, mid_coord_1, mid_coord_3});
-    node.child.push_back({false, node.level + 1, node.dem_source,
+    node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_1, node.vert_2, mid_vert_2,
             mid_coord_1, node.coord_2, mid_coord_2});
-    node.child.push_back({false, node.level + 1, node.dem_source,
+    node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_3, mid_vert_2, node.vert_3,
             mid_coord_3, mid_coord_2, node.coord_3});
-    node.child.push_back({false, node.level + 1, node.dem_source,
+    node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_2, mid_vert_3, mid_vert_1,
             mid_coord_2, mid_coord_3, mid_coord_1});
     for (auto &child_node : node.child) {
@@ -292,7 +309,7 @@ void TetrahedraGlobe::setTexLayout(std::vector<TriNode> &nodes) {
 
     std::string globle_file;
     if (testImageSource(0, 90.0, -180.0, globle_file, IMG_JPG)) {
-        ImageSource *globe = getImgSource(globle_file);
+        ImageSource *globe = getImgSource(globle_file, NULL);
         int *dst = (int *)mega_texture.data + (max_nodes_side - 1) * node_row_size + (max_nodes_side - 2) * tex_node_size;
         int *src = (int *)globe->data;
         int globe_row_size = tex_node_size * 2;
@@ -320,7 +337,7 @@ void TetrahedraGlobe::setTexLayout(std::vector<TriNode> &nodes) {
                 std::cout << "Too many texture nodes(1)\n";
                 break;
             }
-            ImageSource *source0 = getImgSource(node->tex_source_0);
+            ImageSource *source0 = getImgSource(node->tex_source_0, NULL);
             int *src = (int *)source0->data;
             int *dst = (int *)mega_texture.data + node_row_size * tex_row_reverse + tex_node_size * tex_column_reverse;
             for (int row = 0; row < tex_node_size; row++) {
@@ -356,7 +373,7 @@ void TetrahedraGlobe::setTexLayout(std::vector<TriNode> &nodes) {
         int *dst0_idx_start = (int *)mega_texture.data + tex_row * node_row_size + tex_column * tex_node_size + (tex_sub ? node_last_row_delta : 0);
         int (*dst_idx_offset_iter)(int) = tex_sub ? &dst1_idx_offset_iter : &dst0_idx_offset_iter;
 
-        ImageSource *source0 = getImgSource(node->tex_source_0);
+        ImageSource *source0 = getImgSource(node->tex_source_0, NULL);
         int *src0_idx_start = (int *)source0->data + (node_up ? node_last_row_start : 0);
         int (*src0_idx_offset_iter)(int) = node_up ? !node_left || span_node ? &src0_upright_idx_offset_iter : &src0_upleft_idx_offset_iter
                                                    : node_left || span_node ? &src0_downleft_idx_offset_iter : &src0_downright_idx_offset_iter;
@@ -364,7 +381,7 @@ void TetrahedraGlobe::setTexLayout(std::vector<TriNode> &nodes) {
         int *src1_idx_start;
         int (*src1_idx_offset_iter)(int);
         if (span_node) {
-            source1 = getImgSource(node->tex_source_1);
+            source1 = getImgSource(node->tex_source_1, NULL);
             src1_idx_start = (int *)source1->data + (node_up ? node_last_row_start : 0);
             src1_idx_offset_iter = node_up ? &src1_up_idx_offset_iter : &src1_down_idx_offset_iter;
         }
@@ -423,14 +440,14 @@ void TetrahedraGlobe::genGlobe(glm::dvec3 camPos) {
     // North pole at (0, -1, 0)
     // lat:0;lng:0 at (1, 0, 0)
     std::vector<TriNode> nodes = {
-        {true, 1, NULL, {0.0, -1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {90.0, -135.0}, {0.0, -180.0}, {0.0, -90.0}},
-        {true, 1, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}, {1.0, 0.0, 0.0},  {90.0, -45.0}, {0.0, -90.0}, {0.0, 0.0}},
-        {true, 1, NULL, {0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {90.0, 45.0}, {0.0, 0.0}, {0.0, 90.0}},
-        {true, 1, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0},  {90.0, 135.0}, {0.0, 90.0}, {0.0, 180.0}},
-        {true, 1, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0},  {-90.0, -135.0}, {0.0, -90.0}, {0.0, -180.0}},
-        {true, 1, NULL, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, -1.0},   {-90.0, -45.0}, {0.0, 0.0}, {0.0, -90.0}},
-        {true, 1, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},    {-90.0, 45.0}, {0.0, 90.0}, {0.0, 0.0}},
-        {true, 1, NULL, {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {-90.0, 135.0}, {0.0, 180.0}, {0.0, 90.0}},
+        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {90.0, -135.0}, {0.0, -180.0}, {0.0, -90.0}},
+        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}, {1.0, 0.0, 0.0},  {90.0, -45.0}, {0.0, -90.0}, {0.0, 0.0}},
+        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {90.0, 45.0}, {0.0, 0.0}, {0.0, 90.0}},
+        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0},  {90.0, 135.0}, {0.0, 90.0}, {0.0, 180.0}},
+        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0},  {-90.0, -135.0}, {0.0, -90.0}, {0.0, -180.0}},
+        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, -1.0},   {-90.0, -45.0}, {0.0, 0.0}, {0.0, -90.0}},
+        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},    {-90.0, 45.0}, {0.0, 90.0}, {0.0, 0.0}},
+        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {-90.0, 135.0}, {0.0, 180.0}, {0.0, 90.0}},
     };
     texture_nodes.clear();
     for (auto &node : nodes) {

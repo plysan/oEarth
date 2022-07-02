@@ -190,7 +190,7 @@ glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVert
 }
 
 glm::detail::uint32 calculateColor(float height, float viewAngleCos, float sunAngleVerticalCos, float sunAngleHorizontalCos, bool debugColor) {
-    glm::vec4 colorCiexyz = calculateColorCiexyz(height, acos(viewAngleCos)/glm::pi<float>()*180.0f, acos(sunAngleVerticalCos)/glm::pi<float>()*180.0f, acos(sunAngleHorizontalCos)/glm::pi<float>()*180.0f, debugColor);
+    glm::vec4 colorCiexyz = calculateColorCiexyz(height, std::acos(viewAngleCos)/glm::pi<float>()*180.0f, std::acos(sunAngleVerticalCos)/glm::pi<float>()*180.0f, std::acos(sunAngleHorizontalCos)/glm::pi<float>()*180.0f, debugColor);
 
     if(colorCiexyz.x > maxIntensityCiexyz)maxIntensityCiexyz = colorCiexyz.x;
     if(colorCiexyz.y > maxIntensityCiexyz)maxIntensityCiexyz = colorCiexyz.y;

@@ -1,6 +1,8 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+#include "../vars.h"
+
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) in vec4 scatter_rgba;
 layout(location = 2) in float sun_proportion;
@@ -10,6 +12,8 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 p_inv;
+    mat4 v_inv;
     vec3 wordOffset;
     int target;
 } ubo;
@@ -17,8 +21,10 @@ layout(std140, binding = 0) uniform UniformBufferObject {
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    if (ubo.target == 1) {
+    if (ubo.target == TARGET_SKY) {
         outColor.rgb = scatter_rgba.rgb;
+    } else if (ubo.target == TARGET_WATER) {
+        outColor.rgb = vec3(mod(fragTexCoord.x, 1.0), mod(fragTexCoord.y, 1.0), 0.0);
     } else {
         outColor.rgb = scatter_rgba.rgb + (1 - scatter_rgba.a) * texture(texSampler, fragTexCoord).rgb * sun_proportion;
     }
