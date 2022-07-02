@@ -155,7 +155,7 @@ float getNodeHeight(TriNode &node, glm::dvec2 &coord) {
         float* data = (float*)source->data;
         return data[source->w * y + x] / earth_r_meter;
     }
-    return 0.0f;
+    return -0.0001f;
 }
 
 void TetrahedraGlobe::upLevel(TriNode &node) {

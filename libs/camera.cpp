@@ -14,6 +14,9 @@
 #include "camera.h"
 
 
+static const float FOV_MIN = 20.0f;
+static const float FOV_RANGE = 100.0f;
+
 glm::vec3 getCoveredViewFromAbove(Camera &camera) {
     glm::vec3 pos_above = camera.pos * 1.01;
     glm::vec3 earth_center_n = -glm::normalize(camera.pos);
@@ -101,24 +104,83 @@ double getDirLenFromPos(double height, double cos_down_dir) {
     return glm::sin(rad_a) * d;
 }
 
-void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dvec3 offset) {
-    glm::vec3 axi = glm::cross(up, dir);
-    glm::vec3 dir_btm = glm::rotate(dir, glm::radians(fov/2), axi);
-    glm::vec3 dir_top = glm::rotate(dir, -glm::radians(fov/2), axi);
-    double cos_down_db = glm::dot(-up, dir_btm);
-    double cos_down_dt = glm::dot(-up, dir_top);
-    double height = glm::length(pos) - earthRadius;
+static const int RES_H = 100;
+static const float H_MIN = 0.000001f;
+static const float H_RANGE = 1.0f;
+static const int RES_RAD = 250;
+static const int RES_FOV = 20;
+struct InvParam {
+    float d_h;
+    float h_inv;
+    float rad_fov_inv;
+    float rad_down_di;
+
+    InvParam operator + (const InvParam &obj) {
+        InvParam tmp = {
+            d_h + obj.d_h,
+            h_inv + obj.h_inv,
+            rad_fov_inv + obj.rad_fov_inv,
+            rad_down_di + obj.rad_down_di,
+        };
+        return tmp;
+    }
+
+    InvParam operator - (const InvParam &obj) {
+        InvParam tmp = {
+            d_h - obj.d_h,
+            h_inv - obj.h_inv,
+            rad_fov_inv - obj.rad_fov_inv,
+            rad_down_di - obj.rad_down_di,
+        };
+        return tmp;
+    }
+
+    InvParam operator / (const int div) {
+        InvParam tmp = {
+            d_h / div,
+            h_inv / div,
+            rad_fov_inv / div,
+            rad_down_di / div,
+        };
+        return tmp;
+    }
+
+    InvParam operator * (const float fac) {
+        InvParam tmp = {
+            d_h * fac,
+            h_inv * fac,
+            rad_fov_inv * fac,
+            rad_down_di * fac,
+        };
+        return tmp;
+    }
+};
+static InvParam inv_map[RES_H][RES_RAD][RES_FOV];
+
+float getInvDeltaH(float h) {
+    return h * 2;
+}
+
+InvParam getInvParam(float height, float rad_down_dir, float fov) {
+    glm::vec3 axi = glm::vec3(0.0f, 0.0f, -1.0f);
+    glm::vec3 down = glm::vec3(0.0f, -1.0f, 0.0f);
+    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 dir = glm::rotate(down, rad_down_dir, axi);
+    glm::vec3 dir_btm = glm::rotate(dir, -glm::radians(fov/2), axi);
+    glm::vec3 dir_top = glm::rotate(dir, glm::radians(fov/2), axi);
+    double cos_down_db = glm::dot(down, dir_btm);
+    double cos_down_dt = glm::dot(down, dir_top);
     double len_dir_btm = getDirLenFromPos(height, cos_down_db);
     double len_dir_top = getDirLenFromPos(height, cos_down_dt);
-    glm::vec3 pos_cam = lvec3(pos - offset);
+    glm::vec3 pos_cam = glm::vec3(0.0f, height, 0.0f);
     glm::vec3 lookat = pos_cam + dir_btm * (float)len_dir_btm;
-    double d_h = height * 2;
+    float d_h = height * 2;
     glm::vec3 pos_cam_inv = pos_cam + up * (float)d_h;
-    h_inv = height + d_h;
+    float h_inv = height + d_h;
     glm::vec3 dir_inv_btm = glm::normalize(lookat - pos_cam_inv);
 
-    glm::vec3 dir_inv_top = glm::rotate(dir_inv_btm, -glm::radians(fov), axi);
-    double cos_down_dit = glm::dot(-up, dir_inv_top);
+    glm::vec3 dir_inv_top = glm::rotate(dir_inv_btm, glm::radians(fov), axi);
+    double cos_down_dit = glm::dot(down, dir_inv_top);
     double len_dit = getDirLenFromPos(h_inv, cos_down_dit);
     double hlen_dt = glm::sqrt(glm::pow(len_dir_top, 2) - glm::pow(cos_down_dt * len_dir_top, 2));
     double hlen_dit = glm::sqrt(glm::pow(len_dit, 2) - glm::pow(cos_down_dit * len_dit, 2));
@@ -129,14 +191,55 @@ void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dve
             dir_inv_top = glm::normalize(pos_dt - pos_cam_inv);
         } else {
             double rad_shear = glm::acos(cos_down_dit_shear);
-            dir_inv_top = glm::rotate(-up, -(float)rad_shear, axi);
+            dir_inv_top = glm::rotate(down, (float)rad_shear, axi);
         }
     }
-	double cos_fov_inv = glm::dot(dir_inv_top, dir_inv_btm);
+	float rad_fov_inv = glm::acos(glm::dot(dir_inv_top, dir_inv_btm));
+    float rad_down_di = glm::acos(glm::dot(down, dir_inv_top)) - rad_fov_inv/2;
+    InvParam inv_param = {d_h, h_inv, rad_fov_inv, rad_down_di};
+    return inv_param;
+}
 
-    double rad_fov_inv = glm::acos(cos_fov_inv);
-    glm::vec3 dir_inv = glm::rotate(dir_inv_top, (float)rad_fov_inv / 2, axi);
-    p_inv = glm::inverse(glm::perspective((float)rad_fov_inv, aspect * 1.07f, glm::max(0.000001f, h_inv / 100), 2.0f));
+InvParam getInvParamCache(float height, float rad_down_dir, float fov) {
+    float key_h = glm::max(0.0f, height - H_MIN) / H_RANGE * RES_H;
+    int btm_key_h = (int)key_h;
+    float del_key_h = key_h - btm_key_h;
+    float key_rad = rad_down_dir / glm::pi<float>() * RES_RAD;
+    int btm_key_rad = (int)key_rad;
+    float del_key_rad = key_rad - btm_key_rad;
+    float key_fov = (fov - FOV_MIN) / FOV_RANGE * RES_FOV;
+    int btm_key_fov = (int)key_fov;
+    float del_key_fov = key_fov - btm_key_fov;
+    InvParam del_h = inv_map[btm_key_h+1][btm_key_rad][btm_key_fov] - inv_map[btm_key_h][btm_key_rad][btm_key_fov];
+    InvParam del_rad = inv_map[btm_key_h][btm_key_rad+1][btm_key_fov] - inv_map[btm_key_h][btm_key_rad][btm_key_fov];
+    InvParam del_fov = inv_map[btm_key_h][btm_key_rad][btm_key_fov+1] - inv_map[btm_key_h][btm_key_rad][btm_key_fov];
+    return inv_map[btm_key_h][btm_key_rad][btm_key_fov] + del_h * del_key_h + del_rad * del_key_rad + del_fov * del_key_fov;
+}
+
+void initInvParam() {
+    for (int i = 0; i < RES_H; i++) {
+        float h = i * H_RANGE / RES_H + H_MIN;
+        for (int j = 0; j < RES_RAD; j++) {
+            float rad = j * glm::pi<float>() / RES_RAD;
+            for (int k = 0; k < RES_FOV; k++) {
+                float fov = FOV_MIN + k * (FOV_RANGE / RES_FOV);
+                inv_map[i][j][k] = getInvParam(h, rad, fov);
+            }
+        }
+    }
+}
+
+void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dvec3 offset) {
+    float rad_down_dir = glm::acos(glm::dot(-up, dir));
+    double height = glm::length(pos) - earthRadius;
+    float d_h, rad_fov_inv, rad_down_di;
+    InvParam inv_param = getInvParamCache(height, rad_down_dir, fov);
+    h_inv = height + getInvDeltaH(height);
+    glm::vec3 pos_cam = lvec3(pos - offset);
+    glm::vec3 pos_cam_inv = pos_cam + up * getInvDeltaH(height);
+    glm::vec axi = glm::cross(up, dir);
+    glm::vec3 dir_inv = glm::rotate(-up, -inv_param.rad_down_di, axi);
+    p_inv = glm::inverse(glm::perspective((float)inv_param.rad_fov_inv, aspect * 1.07f, glm::max(0.000001f, h_inv / 100), 2.0f));
     v_inv = glm::inverse(glm::lookAt(pos_cam_inv, pos_cam_inv + dir_inv, up));
 }
 

@@ -94,6 +94,7 @@ public:
     void run() {
         initWindow();
         initVulkan();
+        initApp();
         mainLoop();
         cleanup();
     }
@@ -204,6 +205,10 @@ private:
         createSyncObjects();
         std::thread t1(&VKDemo::updateStagingBufferStruct, this);
         t1.detach();
+    }
+
+    void initApp() {
+        initInvParam();
     }
 
     void recreateSwapChain() {

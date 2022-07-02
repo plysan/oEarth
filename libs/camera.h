@@ -18,5 +18,6 @@ struct Camera {
 };
 
 void updateCamera(Camera &camera, GLFWwindow *window);
+void initInvParam();
 
 #endif //CAMERA_H
