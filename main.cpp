@@ -4,6 +4,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtx/common.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -20,7 +21,6 @@
 #include <cstdint>
 #include <set>
 #include <thread>
-#include <chrono>
 
 #include "utils/coord.h"
 #include "utils/vulkan_utils.h"
@@ -46,14 +46,17 @@ struct FrameParam {
     glm::mat4 v_inv;
     glm::vec3 wordOffset;
     int target;
+    glm::vec2 word_offset_coord;
     float height;
+    float time;
     union {
         VkDrawIndirectCommand terrainParam;
         VkDrawIndexedIndirectCommand skyParam;
         VkDrawIndexedIndirectCommand water_param;
     };
-    int pad1;
-    int pad2;
+    glm::mat4 pad1;
+    glm::mat4 pad2;
+    glm::vec3 pad3;
 };
 
 struct StagingBufferStruct {
@@ -68,13 +71,15 @@ struct StagingBufferStruct {
     int water_idx_size;
 };
 
+static double UPDATE_DISTANCE = 0.0004;
+
 class VKDemo {
 
     const uint32_t WIDTH = 1280;
     const uint32_t HEIGHT = 720;
 
     const std::vector<const char*> requiredValidationLayers = {
-        "VK_LAYER_KHRONOS_validation",
+        //"VK_LAYER_KHRONOS_validation",
     };
 
     const std::vector<const char*> requiredPhyDevExt = {
@@ -688,7 +693,7 @@ private:
         scatterSamplerLB.descriptorCount = 1;
         scatterSamplerLB.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         scatterSamplerLB.pImmutableSamplers = nullptr;
-        scatterSamplerLB.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        scatterSamplerLB.stageFlags = VK_SHADER_STAGE_ALL;
 
         std::array<VkDescriptorSetLayoutBinding, 3> bindings = {uboLayoutBinding, terrainSamplerLB, scatterSamplerLB};
 
@@ -994,14 +999,14 @@ private:
         sbs.terrainVertMax = 500000;
         sbs.skyVertMax = 25000;
         sbs.skyIdxMax = 25000;
-        sbs.water_vert_max = 75000;
-        sbs.water_idx_max = 75000;
+        sbs.water_vert_max = 150000;
+        sbs.water_idx_max = 150000;
         lastCameraPos = camera.pos;
         globe.genGlobe(lastCameraPos);
         sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
         skyDome.genSkyDome(lastCameraPos);
         sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
-        water_grid.genWaterGrid(136, 76);
+        water_grid.genWaterGrid(200, 120);
         sbs.water_idx_size = std::min(sbs.water_vert_max, (int)water_grid.indices.size());
         createTerrainImage(globe);
         createVertBuffers();
@@ -1016,7 +1021,7 @@ private:
         while (true) {
             if (inUpdate) {
                 double distanceMoved = glm::distance(lastCameraPos, camera.pos);
-                if (distanceMoved > 0.001) {
+                if (distanceMoved > UPDATE_DISTANCE) {
                     lastCameraPos = camera.pos;
                     globe.genGlobe(lastCameraPos);
                     skyDome.genSkyDome(lastCameraPos);
@@ -1338,11 +1343,18 @@ private:
         fParams[2].view = fParams[0].view;
         fParams[2].proj = camera.proj;
         camera.getPVInv(fParams[2].height, fParams[2].p_inv, fParams[2].v_inv, fParams[0].wordOffset);
+        fParams[2].time = glfwGetTime();
         fParams[2].water_param.indexCount = sbs.water_idx_size;
         fParams[2].water_param.instanceCount = 1;
         fParams[2].water_param.firstIndex = sbs.skyIdxMax;
         fParams[2].water_param.vertexOffset = sbs.terrainVertMax + sbs.skyVertMax;
         fParams[2].water_param.firstInstance = 0;
+        glm::dvec2 word_offset_coord = dPos2DCoord(camera.pos);
+        static double pi2 = glm::pi<double>() * 2;
+        double cos_lat = glm::cos(word_offset_coord.x);
+        static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);
+        word_offset_coord = glm::fmod(word_offset_coord / waveRectSize * pi2, pi2);
+        fParams[2].word_offset_coord = word_offset_coord;
         memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 3);
     }
 
@@ -1441,9 +1453,9 @@ private:
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
         samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerInfo.anisotropyEnable = VK_TRUE;
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(phyDevice, &properties);

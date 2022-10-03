@@ -110,15 +110,11 @@ static const float H_RANGE = 1.0f;
 static const int RES_RAD = 250;
 static const int RES_FOV = 20;
 struct InvParam {
-    float d_h;
-    float h_inv;
     float rad_fov_inv;
     float rad_down_di;
 
     InvParam operator + (const InvParam &obj) {
         InvParam tmp = {
-            d_h + obj.d_h,
-            h_inv + obj.h_inv,
             rad_fov_inv + obj.rad_fov_inv,
             rad_down_di + obj.rad_down_di,
         };
@@ -127,8 +123,6 @@ struct InvParam {
 
     InvParam operator - (const InvParam &obj) {
         InvParam tmp = {
-            d_h - obj.d_h,
-            h_inv - obj.h_inv,
             rad_fov_inv - obj.rad_fov_inv,
             rad_down_di - obj.rad_down_di,
         };
@@ -137,8 +131,6 @@ struct InvParam {
 
     InvParam operator / (const int div) {
         InvParam tmp = {
-            d_h / div,
-            h_inv / div,
             rad_fov_inv / div,
             rad_down_di / div,
         };
@@ -147,8 +139,6 @@ struct InvParam {
 
     InvParam operator * (const float fac) {
         InvParam tmp = {
-            d_h * fac,
-            h_inv * fac,
             rad_fov_inv * fac,
             rad_down_di * fac,
         };
@@ -158,7 +148,7 @@ struct InvParam {
 static InvParam inv_map[RES_H][RES_RAD][RES_FOV];
 
 float getInvDeltaH(float h) {
-    return h * 2;
+    return glm::max(0.00001f, h);
 }
 
 InvParam getInvParam(float height, float rad_down_dir, float fov) {
@@ -174,7 +164,7 @@ InvParam getInvParam(float height, float rad_down_dir, float fov) {
     double len_dir_top = getDirLenFromPos(height, cos_down_dt);
     glm::vec3 pos_cam = glm::vec3(0.0f, height, 0.0f);
     glm::vec3 lookat = pos_cam + dir_btm * (float)len_dir_btm;
-    float d_h = height * 2;
+    float d_h = getInvDeltaH(height);
     glm::vec3 pos_cam_inv = pos_cam + up * (float)d_h;
     float h_inv = height + d_h;
     glm::vec3 dir_inv_btm = glm::normalize(lookat - pos_cam_inv);
@@ -196,12 +186,12 @@ InvParam getInvParam(float height, float rad_down_dir, float fov) {
     }
 	float rad_fov_inv = glm::acos(glm::dot(dir_inv_top, dir_inv_btm));
     float rad_down_di = glm::acos(glm::dot(down, dir_inv_top)) - rad_fov_inv/2;
-    InvParam inv_param = {d_h, h_inv, rad_fov_inv, rad_down_di};
+    InvParam inv_param = {rad_fov_inv, rad_down_di};
     return inv_param;
 }
 
 InvParam getInvParamCache(float height, float rad_down_dir, float fov) {
-    float key_h = glm::max(0.0f, height - H_MIN) / H_RANGE * RES_H;
+    float key_h = glm::pow(glm::max(0.0f, height - H_MIN), 0.2) / H_RANGE * RES_H;
     int btm_key_h = (int)key_h;
     float del_key_h = key_h - btm_key_h;
     float key_rad = rad_down_dir / glm::pi<float>() * RES_RAD;
@@ -218,7 +208,7 @@ InvParam getInvParamCache(float height, float rad_down_dir, float fov) {
 
 void initInvParam() {
     for (int i = 0; i < RES_H; i++) {
-        float h = i * H_RANGE / RES_H + H_MIN;
+        float h = glm::pow(i * H_RANGE / RES_H, 5) + H_MIN;
         for (int j = 0; j < RES_RAD; j++) {
             float rad = j * glm::pi<float>() / RES_RAD;
             for (int k = 0; k < RES_FOV; k++) {
@@ -232,7 +222,6 @@ void initInvParam() {
 void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dvec3 offset) {
     float rad_down_dir = glm::acos(glm::dot(-up, dir));
     double height = glm::length(pos) - earthRadius;
-    float d_h, rad_fov_inv, rad_down_di;
     InvParam inv_param = getInvParamCache(height, rad_down_dir, fov);
     h_inv = height + getInvDeltaH(height);
     glm::vec3 pos_cam = lvec3(pos - offset);

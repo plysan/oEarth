@@ -13,8 +13,8 @@
 
 float integrantLengthCoefficient = 0.95f;
 int integrantLengthInitChunks = 5;
-float integrantLengthMin = 0.000005f * earthRadius;
-float integrantLengthMax = 0.002f * earthRadius;
+double integrantLengthMin = 0.000005 * earthRadius;
+double integrantLengthMax = 0.002 * earthRadius;
 float height0Rayleigh = 7.994 * earthRadius / 6371;
 // decrease/increase to be more/less blue
 float opticalLengthCoefficient = 6.37f / earthRadius;
@@ -84,36 +84,36 @@ float cieMatrix[][4] = {
 float ciexyz2SrgbData[9] = {3.1338561f, -0.9787684f, 0.0719453f, -1.6168667f, 1.9161415f, -0.2289914f, -0.4906146f, 0.0334540f, 1.4052427f};
 glm::mat3 ciexyz2SrgbMatrix = glm::make_mat3(ciexyz2SrgbData);
 
-float getIntegrantLength(glm::vec3& integratDirNormal, glm::vec3& upNormal, float posHeightSealevel) {
-    float upIntegratDirCos = glm::dot(upNormal, integratDirNormal);
-    float integrantLength = posHeightSealevel / (glm::abs(upIntegratDirCos) + 0.00000000001f) / integrantLengthInitChunks;
+double getIntegrantLength(glm::dvec3& integratDirNormal, glm::dvec3& upNormal, double posHeightSealevel) {
+    double upIntegratDirCos = glm::dot(upNormal, integratDirNormal);
+    double integrantLength = posHeightSealevel / (glm::abs(upIntegratDirCos) + 0.00000000001) / integrantLengthInitChunks;
     integrantLength = glm::clamp(integrantLength, integrantLengthMin, integrantLengthMax);
-    bool goingDown = upIntegratDirCos < 0.0f;
+    bool goingDown = upIntegratDirCos < 0.0;
     integrantLength = goingDown ? integrantLength * integrantLengthCoefficient : integrantLength / integrantLengthCoefficient;
     return integrantLength;
 }
 
-float integralOpticalLength(glm::vec3 scatterPos, glm::vec3 sunDirNormal, float viewToScatterOpticalLength) {
-    float integralScatterOpticalLength = viewToScatterOpticalLength;
-    float integrantLength;
-    glm::vec3 integrantDirLength;
-    glm::vec3 integrantPos = scatterPos;
-    float integrantPosHeight = glm::length(integrantPos);
-    float integrantPosHeightSealevel = integrantPosHeight - earthRadius;
-    float integrantPosHeightCoefficient = pow(glm::e<float>(), -(integrantPosHeightSealevel)/height0Rayleigh);
-    float lastIntegrantPosHeight = integrantPosHeight;
-    float lastIntegrantPosHeightCoefficient = integrantPosHeightCoefficient;
+double integralOpticalLength(glm::dvec3 scatterPos, glm::dvec3 sunDirNormal, double viewToScatterOpticalLength) {
+    double integralScatterOpticalLength = viewToScatterOpticalLength;
+    double integrantLength;
+    glm::dvec3 integrantDirLength;
+    glm::dvec3 integrantPos = scatterPos;
+    double integrantPosHeight = glm::length(integrantPos);
+    double integrantPosHeightSealevel = integrantPosHeight - earthRadius;
+    double integrantPosHeightCoefficient = pow(glm::e<double>(), -(integrantPosHeightSealevel)/height0Rayleigh);
+    double lastIntegrantPosHeight = integrantPosHeight;
+    double lastIntegrantPosHeightCoefficient = integrantPosHeightCoefficient;
     while(integrantPosHeight <= atmosphereTopRadius){
         if(integrantPosHeight <= earthRadius){
-            return 999999999.9f;// for sunlight that is blocked by earth, return a big value to approach infinite optical depth, ie, zero intensity
+            return 999999999.9;// for sunlight that is blocked by earth, return a big value to approach infinite optical depth, ie, zero intensity
         }
-        glm::vec3 integrantPosNormal = glm::normalize(integrantPos);
+        glm::dvec3 integrantPosNormal = glm::normalize(integrantPos);
         integrantLength = getIntegrantLength(sunDirNormal, integrantPosNormal, integrantPosHeightSealevel);
         integrantDirLength = sunDirNormal * integrantLength;
         integrantPos += integrantDirLength;
         integrantPosHeight = glm::length(integrantPos);
         integrantPosHeightSealevel = integrantPosHeight - earthRadius;
-        integrantPosHeightCoefficient = pow(glm::e<float>(), -(integrantPosHeightSealevel)/height0Rayleigh);
+        integrantPosHeightCoefficient = pow(glm::e<double>(), -(integrantPosHeightSealevel)/height0Rayleigh);
         if(integrantPosHeight > lastIntegrantPosHeight) {
             integralScatterOpticalLength += lastIntegrantPosHeightCoefficient * integrantLength;
         } else {
@@ -125,23 +125,23 @@ float integralOpticalLength(glm::vec3 scatterPos, glm::vec3 sunDirNormal, float 
     return integralScatterOpticalLength;
 }
 
-glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVertical, float sunAngleHorizontal, bool debugColor) {
+glm::vec4 calculateColorCiexyz(double height, double viewAngle, double sunAngleVertical, double sunAngleHorizontal, bool debugColor) {
     static const int integral_max_steps = 2048;
-    static float integralScatterOpticalLength[integral_max_steps];
-    static float scatterPosCoefficients[integral_max_steps];
-    float viewToScatterOpticalLength = 0.0f;
-    glm::vec3 viewPos = coord2Pos(90.0f, 0.0f, height);
-    glm::vec3 viewDirNormal = glm::normalize(coord2Pos(90.0f-viewAngle, 0.0f, 0.0f));
-    glm::vec3 scatterPos = viewPos;
-    glm::vec3 sunDirNormal = glm::normalize(coord2Pos(90.0f-sunAngleVertical, sunAngleHorizontal, 0.0f));
-    glm::vec3 scatterPosNormal;
-    float integrantValue;
-    float integrantLength;
-    float scatterPosHeight = glm::length(scatterPos);
-    float scatterPosHeightSealevel = scatterPosHeight - earthRadius;
-    float scatterPosHeightCoefficient = pow(glm::e<float>(), -(scatterPosHeightSealevel)/height0Rayleigh);
-    float lastScatterPosHeight = scatterPosHeight;
-    float lastScatterPosHeightCoefficient = scatterPosHeightCoefficient;
+    static double integralScatterOpticalLength[integral_max_steps];
+    static double scatterPosCoefficients[integral_max_steps];
+    double viewToScatterOpticalLength = 0.0;
+    glm::dvec3 viewPos = dCoord2DPos(90.0, 0.0, height);
+    glm::dvec3 viewDirNormal = glm::normalize(dCoord2DPos(90.0-viewAngle, 0.0, 0.0));
+    glm::dvec3 scatterPos = viewPos;
+    glm::dvec3 sunDirNormal = glm::normalize(coord2Pos(90.0-sunAngleVertical, sunAngleHorizontal, 0.0));
+    glm::dvec3 scatterPosNormal;
+    double integrantValue;
+    double integrantLength;
+    double scatterPosHeight = glm::length(scatterPos);
+    double scatterPosHeightSealevel = scatterPosHeight - earthRadius;
+    double scatterPosHeightCoefficient = pow(glm::e<double>(), -(scatterPosHeightSealevel)/height0Rayleigh);
+    double lastScatterPosHeight = scatterPosHeight;
+    double lastScatterPosHeightCoefficient = scatterPosHeightCoefficient;
     int integralScatterOpticalLengthIdx = 0;
     int integrantCount = 0;
     while(scatterPosHeight <= atmosphereTopRadius && scatterPosHeight >= earthRadius) {
@@ -151,7 +151,7 @@ glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVert
         scatterPos += viewDirNormal * integrantLength;
         scatterPosHeight = glm::length(scatterPos);
         scatterPosHeightSealevel = scatterPosHeight - earthRadius;
-        scatterPosHeightCoefficient = pow(glm::e<float>(), -(scatterPosHeightSealevel)/height0Rayleigh);
+        scatterPosHeightCoefficient = pow(glm::e<double>(), -(scatterPosHeightSealevel)/height0Rayleigh);
         if(scatterPosHeight > lastScatterPosHeight) {
             integrantValue = integrantLength * lastScatterPosHeightCoefficient;
         } else {
@@ -189,8 +189,8 @@ glm::vec4 calculateColorCiexyz(float height, float viewAngle, float sunAngleVert
     return glm::vec4(colorCiexyz * (float)(1 + pow(scatterAngleCos, 2)), viewPathOpticalDepth);
 }
 
-glm::detail::uint32 calculateColor(float height, float viewAngleCos, float sunAngleVerticalCos, float sunAngleHorizontalCos, bool debugColor) {
-    glm::vec4 colorCiexyz = calculateColorCiexyz(height, std::acos(viewAngleCos)/glm::pi<float>()*180.0f, std::acos(sunAngleVerticalCos)/glm::pi<float>()*180.0f, std::acos(sunAngleHorizontalCos)/glm::pi<float>()*180.0f, debugColor);
+glm::detail::uint32 calculateColor(float height, double viewAngleCos, float sunAngleVerticalCos, float sunAngleHorizontalCos, bool debugColor) {
+    glm::vec4 colorCiexyz = calculateColorCiexyz(height, glm::acos(viewAngleCos)/glm::pi<float>()*180.0, std::acos(sunAngleVerticalCos)/glm::pi<float>()*180.0f, std::acos(sunAngleHorizontalCos)/glm::pi<float>()*180.0f, debugColor);
 
     if(colorCiexyz.x > maxIntensityCiexyz)maxIntensityCiexyz = colorCiexyz.x;
     if(colorCiexyz.y > maxIntensityCiexyz)maxIntensityCiexyz = colorCiexyz.y;
@@ -219,11 +219,14 @@ void SkyDome::genSkyDome(glm::vec3 cameraPos) {
     //TODO 90 dynamic
     int latCount = 100;
     int lngCount = 40;
-    float latInterval = 90.0f/(latCount - 1);
+    double length_center_pos = glm::length(cameraPos);
+    double rad_pos = glm::acos(earthRadius / length_center_pos);
+    static double rad_sky = glm::acos(earthRadius / atmosphereTopRadius);
+    float latInterval = (glm::degrees(rad_pos + rad_sky) + 2.0) / (latCount - 1);
     float lngInterval = 360.0f/(lngCount - 1);
     for (int i=0; i<latCount; i++) {
         for (int j=0; j<lngCount; j++) {
-            glm::vec3 pos = coord2Pos(i*latInterval, j*lngInterval, atmosphereThickness);
+            glm::vec3 pos = coord2Pos(90.0f-i*latInterval, j*lngInterval, atmosphereThickness);
             // north pole rotate to coord(0, 90) to align with glm view coordinate's original lookat direction
             pos = glm::rotate(pos, 90.0f/180.0f*glm::pi<float>(), glm::vec3(-1.0f, 0.0f, 0.0f));
             vertices.push_back({pos, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}});
@@ -234,11 +237,11 @@ void SkyDome::genSkyDome(glm::vec3 cameraPos) {
         for (int j=0; j<lngCount-1; j++) {
             int begin = j + lngCount * i;
             indices.push_back(begin);
+            indices.push_back(begin + lngCount + 1);
             indices.push_back(begin + lngCount);
             indices.push_back(begin + lngCount + 1);
-            indices.push_back(begin + lngCount + 1);
-            indices.push_back(begin + 1);
             indices.push_back(begin);
+            indices.push_back(begin + 1);
         }
     }
     std::cout << "Sky indices: " << indices.size() << ", vertices: " << vertices.size() << '\n';
@@ -273,7 +276,7 @@ void SkyDome::genScatterTexure() {
         float heightHorizonAngleCos = -(sqrt(pow(earthRadius+height, 2) - pow(earthRadius, 2)) / (earthRadius+height));
         // cos of view angle: 1 -> -1
         for(int j=textureSize-1; j>-1; j--) {
-            float viewAngleCos = 2.0f * (float)j/(textureSize-1) - 1.0f;
+            double viewAngleCos = 2.0f * (float)j/(textureSize-1) - 1.0f;
             static int colorPrintDetail = 4;
             static int jInterval = textureSize / colorPrintDetail;
             bool debugJ = j % jInterval == 0;
