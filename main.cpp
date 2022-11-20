@@ -174,12 +174,13 @@ private:
     glm::dvec3 lastCameraPos;
     bool inUpdate = false;
     FrameParam fParams[3];
+    long frame_count = 0, frame_count_last = 0;
 
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         //glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+        window = glfwCreateWindow(WIDTH, HEIGHT, "fps:", nullptr, nullptr);
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
@@ -210,6 +211,8 @@ private:
         createSyncObjects();
         std::thread t1(&VKDemo::updateStagingBufferStruct, this);
         t1.detach();
+        std::thread t2(&VKDemo::updateFps, this);
+        t2.detach();
     }
 
     void initApp() {
@@ -1017,6 +1020,16 @@ private:
                 scatterImage, scatterImageMemory, logicalDevice, phyDevice, graphicsQueue, commandPool);
     }
 
+    void updateFps() {
+        while (true) {
+            std::stringstream ss;
+            ss << "fps: " << frame_count - frame_count_last;
+            frame_count_last = frame_count;
+            glfwSetWindowTitle(window, ss.str().c_str());
+            std::this_thread::sleep_for (std::chrono::milliseconds(500));
+        }
+    }
+
     void updateStagingBufferStruct() {
         while (true) {
             if (inUpdate) {
@@ -1312,6 +1325,7 @@ private:
             maxCost = costTmp;
             std::cout << "Max frame cost: " << maxCost << " cps: " << CLOCKS_PER_SEC << " details: " << stamp2-stamp1 << ' ' << stamp3-stamp2 << ' ' << stamp4-stamp3 << '\n';
         }
+        frame_count++;
     }
 
     void updateUniformBuffer(uint32_t currentImage) {
