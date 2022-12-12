@@ -1,4 +1,5 @@
 layout(binding = 2) uniform sampler3D scatterSampler;
+layout(binding = 3) uniform sampler2D compImg;
 
 float scatter_texture_size = scatterTextureSunAngleSize * scatterTextureHeightSize;
 float view_angle_factor = float(scatter_texture_size - 1) / scatter_texture_size;

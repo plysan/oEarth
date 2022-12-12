@@ -26,9 +26,22 @@ uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, V
  *  util functions start
  */
 
-void createStaticImage4(int width, int height, int depth, void *src_data, VkImage &image, VkDeviceMemory& imageMemory,
-        VkDevice logicalDevice, VkPhysicalDevice phyDevice, VkQueue graphicsQueue, VkCommandPool commandPool) {
-    VkDeviceSize imageSize = width * height * depth * 4;
+void createInitialImage(int width, int height, int depth, VkFormat format, void *src_data, VkImage &image, VkDeviceMemory& imageMemory,
+        VkDevice logicalDevice, VkPhysicalDevice phyDevice, VkQueue queue, VkCommandPool commandPool) {
+    int pixSize;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    switch (format) {
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            pixSize = 4;
+            break;
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            pixSize = 8;
+            usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            break;
+        defaut:
+            throw std::runtime_error("unsupported VkFormat.");
+    }
+    VkDeviceSize imageSize = width * height * depth * pixSize;
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
@@ -39,12 +52,11 @@ void createStaticImage4(int width, int height, int depth, void *src_data, VkImag
     vkMapMemory(logicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
     memcpy(data, src_data, static_cast<size_t>(imageSize));
     vkUnmapMemory(logicalDevice, stagingBufferMemory);
-    createImage(width, height, depth, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+    createImage(width, height, depth, format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, usage,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, imageMemory, logicalDevice, phyDevice);
-    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, logicalDevice, graphicsQueue, commandPool);
-    copyBufferToImage(stagingBuffer, image, width, height, depth, logicalDevice, graphicsQueue, commandPool);
-    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, logicalDevice, graphicsQueue, commandPool);
+    transitionImageLayout(image, format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, logicalDevice, queue, commandPool, NULL, 0);
+    copyBufferToImage(stagingBuffer, image, width, height, depth, logicalDevice, queue, commandPool);
+    transitionImageLayout(image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, logicalDevice, queue, commandPool, NULL, 0);
     vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
     vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
 }
@@ -72,7 +84,7 @@ void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyF
     vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
 }
 
-void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageLayout imageLayout, VkImageTiling tiling, VkImageUsageFlags usage,
         VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory, VkDevice logicalDevice, VkPhysicalDevice phyDevice) {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -88,7 +100,7 @@ void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat forma
     imageInfo.arrayLayers = 1;
     imageInfo.format = format;
     imageInfo.tiling = tiling;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.initialLayout = imageLayout;
     imageInfo.usage = usage;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -110,8 +122,13 @@ void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat forma
 }
 
 void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout,
-        VkDevice logicalDevice, VkQueue graphicsQueue, VkCommandPool commandPool) {
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(logicalDevice, commandPool);
+        VkDevice logicalDevice, VkQueue commandQueue, VkCommandPool commandPool, VkCommandBuffer cmdBuf, bool r2w) {
+    VkCommandBuffer commandBuffer;
+    if (cmdBuf == NULL) {
+        commandBuffer = beginSingleTimeCommands(logicalDevice, commandPool);
+    } else {
+        commandBuffer = cmdBuf;
+    }
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = oldLayout;
@@ -124,12 +141,21 @@ void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayo
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = 0; // TODO
-    barrier.dstAccessMask = 0; // TODO
+
 
     VkPipelineStageFlags sourceStage;
     VkPipelineStageFlags destinationStage;
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    if (oldLayout == VK_IMAGE_LAYOUT_GENERAL && newLayout == VK_IMAGE_LAYOUT_GENERAL) {
+        if (r2w) {
+            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        } else {
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        }
+        sourceStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -139,12 +165,19 @@ void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayo
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_GENERAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
     } else {
         throw std::invalid_argument("unsupported layout transition!");
     }
     vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
-    endSingleTimeCommands(logicalDevice, graphicsQueue, commandBuffer, commandPool);
+    if (cmdBuf == NULL) {
+        endSingleTimeCommands(logicalDevice, commandQueue, commandBuffer, commandPool);
+    }
 }
 
 void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t depth,
@@ -343,7 +376,7 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
  */
 
 bool validatePhysicalDevice(VkPhysicalDevice lPhysicalDevice, VkSurfaceKHR &surface, VkSurfaceCapabilitiesKHR &phyDevSurCaps,
-        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx,
+        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx, int &phyDevComputeFamilyIdx,
         const std::vector<const char*> &requiredPhyDevExt, int uniformBufBlockSize) {
     VkPhysicalDeviceProperties deviceProperties;
     vkGetPhysicalDeviceProperties(lPhysicalDevice, &deviceProperties);
@@ -394,7 +427,11 @@ bool validatePhysicalDevice(VkPhysicalDevice lPhysicalDevice, VkSurfaceKHR &surf
                 std::cout << "Select present family: " << std::hex << std::setfill('0') << std::setw(8) << queueFamily.queueFlags << '\n';
             }
         }
-        if (phyDevGraphFamilyIdx >= 0 && phyDevPresentFamilyIdx >= 0) {
+        if (phyDevComputeFamilyIdx < 0 && queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) {
+            phyDevComputeFamilyIdx = idx;
+            std::cout << "Select compute family: " << std::hex << std::setfill('0') << std::setw(8) << queueFamily.queueFlags << '\n';
+        }
+        if (phyDevGraphFamilyIdx >= 0 && phyDevPresentFamilyIdx >= 0 && phyDevComputeFamilyIdx >= 0) {
             std::cout << "Suitable physical device: " << deviceProperties.deviceName << '\n';
             return true;
         }
@@ -402,11 +439,13 @@ bool validatePhysicalDevice(VkPhysicalDevice lPhysicalDevice, VkSurfaceKHR &surf
     }
     phyDevGraphFamilyIdx = -1;
     phyDevPresentFamilyIdx = -1;
+    phyDevComputeFamilyIdx = -1;
     return false;
 }
 
 void pickPhysicalDevice(VkInstance instance, VkPhysicalDevice &phyDevice, VkSurfaceKHR &surface, VkSurfaceCapabilitiesKHR &phyDevSurCaps,
-        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx, const std::vector<const char*> &requiredPhyDevExt, int uniformBufBlockSize) {
+        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx, int &phyDevComputeFamilyIdx,
+        const std::vector<const char*> &requiredPhyDevExt, int uniformBufBlockSize) {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
     if (deviceCount == 0) {
@@ -415,7 +454,8 @@ void pickPhysicalDevice(VkInstance instance, VkPhysicalDevice &phyDevice, VkSurf
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
     for (const auto& device : devices) {
-        if (validatePhysicalDevice(device, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx, requiredPhyDevExt, uniformBufBlockSize)) {
+        if (validatePhysicalDevice(device, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx,
+                    phyDevComputeFamilyIdx, requiredPhyDevExt, uniformBufBlockSize)) {
             phyDevice = device;
             break;
         }
@@ -430,10 +470,10 @@ void pickPhysicalDevice(VkInstance instance, VkPhysicalDevice &phyDevice, VkSurf
  */
 
 void createLogicalDevice(VkPhysicalDevice phyDevice, VkDevice &logicalDevice, VkQueue &graphicsQueue, VkQueue &presentQueue,
-        const std::vector<const char*> &requiredValidationLayers, const std::vector<const char*> &requiredPhyDevExt,
-        int phyDevGraphFamilyIdx, int phyDevPresentFamilyIdx, bool enableValidationLayers) {
+        VkQueue &computeQueue, const std::vector<const char*> &requiredValidationLayers, const std::vector<const char*> &requiredPhyDevExt,
+        int phyDevGraphFamilyIdx, int phyDevPresentFamilyIdx, int phyDevComputeFamilyIdx, bool enableValidationLayers) {
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-    std::set<uint32_t> uniqueQueueFamilies = {(uint32_t)phyDevGraphFamilyIdx, (uint32_t)phyDevPresentFamilyIdx};
+    std::set<uint32_t> uniqueQueueFamilies = {(uint32_t)phyDevGraphFamilyIdx, (uint32_t)phyDevPresentFamilyIdx, (uint32_t)phyDevComputeFamilyIdx};
     float queuePriority = 1.0f;
     for (uint32_t queueFamily : uniqueQueueFamilies) {
         VkDeviceQueueCreateInfo queueCreateInfo{};
@@ -465,6 +505,7 @@ void createLogicalDevice(VkPhysicalDevice phyDevice, VkDevice &logicalDevice, Vk
     }
     vkGetDeviceQueue(logicalDevice, phyDevGraphFamilyIdx, 0, &graphicsQueue);
     vkGetDeviceQueue(logicalDevice, phyDevPresentFamilyIdx, 0, &presentQueue);
+    vkGetDeviceQueue(logicalDevice, phyDevComputeFamilyIdx, 0, &computeQueue);
 }
 
 /**
@@ -532,10 +573,11 @@ void createSwapChain(VkPhysicalDevice phyDevice, VkDevice logicalDevice,
     SwapChainSupportDetails swapChainSupport = querySwapChainSupport(phyDevice, surface);
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities, window);
-    uint32_t imageCount = phyDevSurCaps.minImageCount + 1;
+    uint32_t imageCount = phyDevSurCaps.minImageCount;
     if (phyDevSurCaps.maxImageCount > 0 && imageCount > phyDevSurCaps.maxImageCount) {
         imageCount = phyDevSurCaps.maxImageCount;
     }
+    std::cout << "swapChainImgCount: " << imageCount << '\n';
     VkSwapchainCreateInfoKHR createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     createInfo.surface = surface;
@@ -681,7 +723,7 @@ void createRenderPass(VkPhysicalDevice phyDevice, VkDevice logicalDevice, VkRend
  * descriptor set layout
  */
 
-void createDescriptorSetLayout(VkDevice logicalDevice, VkDescriptorSetLayout &descriptorSetLayout,
+void createDescriptorSetLayout(VkDevice logicalDevice, VkDescriptorSetLayout &descSetLayout,
         std::vector<VkDescriptorType> descriptorTypes, std::vector<VkShaderStageFlags> shaderStageFlags) {
     assert(descriptorTypes.size() == shaderStageFlags.size());
     std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -698,7 +740,7 @@ void createDescriptorSetLayout(VkDevice logicalDevice, VkDescriptorSetLayout &de
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings = bindings.data();
-    if (vkCreateDescriptorSetLayout(logicalDevice, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+    if (vkCreateDescriptorSetLayout(logicalDevice, &layoutInfo, nullptr, &descSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor set layout!");
     }
 }
@@ -733,7 +775,7 @@ VkShaderModule createShaderModule(VkDevice logicalDevice, const std::vector<char
 }
 
 void createGraphicsPipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLayout, VkPipeline &graphicsPipeline,
-        VkDescriptorSetLayout &descriptorSetLayout, VkRenderPass renderPass, VkExtent2D swapChainExtent, int vertInStride,
+        VkDescriptorSetLayout &descSetLayout, VkRenderPass renderPass, VkExtent2D swapChainExtent, int vertInStride,
         std::vector<int> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat) {
     auto vertShaderCode = readFile("shaders/shader.vert.spv");
     auto fragShaderCode = readFile("shaders/shader.frag.spv");
@@ -853,20 +895,10 @@ void createGraphicsPipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLa
     colorBlending.blendConstants[2] = 0.0f; // Optional
     colorBlending.blendConstants[3] = 0.0f; // Optional
 
-    VkDynamicState dynamicStates[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_LINE_WIDTH
-    };
-
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 2;
-    dynamicState.pDynamicStates = dynamicStates;
-
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1; // Optional
-    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout; // Optional
+    pipelineLayoutInfo.pSetLayouts = &descSetLayout; // Optional
     pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
     pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -899,6 +931,31 @@ void createGraphicsPipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLa
     vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
 }
 
+void createComputePipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLayout, VkPipeline &computePipeline, VkDescriptorSetLayout descSetLayout) {
+    auto compShaderCode = readFile("shaders/shader.comp.spv");
+    VkShaderModule compShaderModule = createShaderModule(logicalDevice, compShaderCode);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1; // Optional
+    pipelineLayoutInfo.pSetLayouts = &descSetLayout; // Optional
+    pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
+    pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
+    if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create pipeline layout!");
+    }
+
+    VkComputePipelineCreateInfo computePipelineCreateInfo = {
+        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, 0, 0, {
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            0, 0, VK_SHADER_STAGE_COMPUTE_BIT, compShaderModule, "main", 0
+        }, pipelineLayout, 0, 0
+    };
+    if (vkCreateComputePipelines(logicalDevice, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &computePipeline) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create compute pipeline!");
+    }
+}
+
 /**
  * command pool
  */
@@ -921,7 +978,7 @@ void createCommandPool(VkDevice logicalDevice, VkCommandPool &commandPool, int p
 void createDepthResources(VkPhysicalDevice phyDevice, VkDevice logicalDevice, VkExtent2D swapChainExtent,
         VkImage &depthImage, VkDeviceMemory &depthImageMemory, VkImageView &depthImageView) {
     VkFormat depthFormat = findDepthFormat(phyDevice);
-    createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_TILING_OPTIMAL,
+    createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             depthImage, depthImageMemory, logicalDevice, phyDevice);
     depthImageView = createImageView(logicalDevice, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 2);
@@ -964,9 +1021,9 @@ void createSampler(VkPhysicalDevice phyDevice, VkDevice logicalDevice, VkSampler
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
     samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.anisotropyEnable = VK_TRUE;
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(phyDevice, &properties);
@@ -999,50 +1056,86 @@ void createDescriptorPool(VkDevice logicalDevice, VkDescriptorPool &descriptorPo
     }
 }
 
-void createDescriptorSets(VkDevice logicalDevice, VkDescriptorPool descriptorPool, uint32_t descSetCount, VkDescriptorSetLayout descriptorSetLayout,
-        std::vector<VkDescriptorSet> &descriptorSets, std::vector<VkBuffer> &uniformBuffers, int uniformBufferSize,
-        const std::vector<VkImageView> &imageViews, const std::vector<VkSampler> &samplers) {
-    std::vector<VkDescriptorSetLayout> layouts(descSetCount, descriptorSetLayout);
+void createDescriptorSets(VkDevice logicalDevice, VkDescriptorPool descriptorPool, uint32_t descSetCount, uint32_t swapchainCount,
+        VkDescriptorSetLayout gDescSetLayout, VkDescriptorSetLayout cDescSetLayout,
+        std::vector<VkDescriptorSet> &renderDescSets, std::vector<VkDescriptorSet> &compDescSets,
+        std::vector<VkBuffer> &uniformBuffers, int uniformBufferSize, const std::vector<VkImageView> &imageViews,
+        const std::vector<VkSampler> &samplers, std::vector<VkImageView> compImgViews, std::vector<VkSampler> compImgSamplers) {
+    uint32_t compSize = compImgViews.size();
+    std::vector<VkDescriptorSetLayout> layouts(descSetCount, gDescSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = descSetCount;
     allocInfo.pSetLayouts = layouts.data();
-    descriptorSets.resize(descSetCount);
-    if (vkAllocateDescriptorSets(logicalDevice, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate descriptor sets!");
+    renderDescSets.resize(descSetCount);
+    if (vkAllocateDescriptorSets(logicalDevice, &allocInfo, renderDescSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate graphic descriptor sets!");
     }
-    for (size_t i = 0; i < descSetCount; i++) {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i];
-        bufferInfo.offset = 0;
-        bufferInfo.range = uniformBufferSize;
-        std::vector<VkWriteDescriptorSet> descriptorWrites;
-        VkWriteDescriptorSet bufferInfoWrite{};
-        bufferInfoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        bufferInfoWrite.dstSet = descriptorSets[i];
-        bufferInfoWrite.dstBinding = 0;
-        bufferInfoWrite.dstArrayElement = 0;
-        bufferInfoWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        bufferInfoWrite.descriptorCount = 1;
-        bufferInfoWrite.pBufferInfo = &bufferInfo;
-        descriptorWrites.push_back(bufferInfoWrite);
-        std::vector<VkDescriptorImageInfo> imageInfos(imageViews.size());
-        for (int j = 0; j < imageViews.size(); j++) {
-            imageInfos.at(j).imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfos.at(j).imageView = imageViews.at(j);
-            imageInfos.at(j).sampler = samplers.at(j);
-            VkWriteDescriptorSet imageInfoWrite{};
-            imageInfoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            imageInfoWrite.dstSet = descriptorSets[i];
-            imageInfoWrite.dstBinding = j + 1;
-            imageInfoWrite.dstArrayElement = 0;
-            imageInfoWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            imageInfoWrite.descriptorCount = 1;
-            imageInfoWrite.pImageInfo = &imageInfos.at(j);
-            descriptorWrites.push_back(imageInfoWrite);
+    // for render
+    for (int k = 0; k < compSize; k++) {
+        for (size_t i = 0; i < swapchainCount; i++) {
+            int descSetIdx = swapchainCount * k + i;
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = uniformBuffers[i];
+            bufferInfo.offset = 0;
+            bufferInfo.range = uniformBufferSize;
+            std::vector<VkWriteDescriptorSet> descriptorWrites;
+            VkWriteDescriptorSet bufferInfoWrite{};
+            bufferInfoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            bufferInfoWrite.dstSet = renderDescSets[descSetIdx];
+            bufferInfoWrite.dstBinding = 0;
+            bufferInfoWrite.dstArrayElement = 0;
+            bufferInfoWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            bufferInfoWrite.descriptorCount = 1;
+            bufferInfoWrite.pBufferInfo = &bufferInfo;
+            descriptorWrites.push_back(bufferInfoWrite);
+            std::vector<VkDescriptorImageInfo> imageInfos(imageViews.size());
+            for (int j = 0; j < imageViews.size(); j++) {
+                imageInfos.at(j).imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfos.at(j).imageView = imageViews.at(j);
+                imageInfos.at(j).sampler = samplers.at(j);
+                VkWriteDescriptorSet imageInfoWrite{};
+                imageInfoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                imageInfoWrite.dstSet = renderDescSets[descSetIdx];
+                imageInfoWrite.dstBinding = j + 1;
+                imageInfoWrite.dstArrayElement = 0;
+                imageInfoWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                imageInfoWrite.descriptorCount = 1;
+                imageInfoWrite.pImageInfo = &imageInfos.at(j);
+                descriptorWrites.push_back(imageInfoWrite);
+            }
+            VkDescriptorImageInfo compImageInfo{compImgSamplers[k], compImgViews[k], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet compImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, renderDescSets[descSetIdx],
+                static_cast<uint32_t>(imageViews.size() + 1), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compImageInfo, 0, 0};
+            descriptorWrites.push_back(compImageWrite);
+            vkUpdateDescriptorSets(logicalDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
-        vkUpdateDescriptorSets(logicalDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
+    // for compute
+    assert(compSize == 3);
+    std::vector<VkDescriptorSetLayout> compLayouts(descSetCount, cDescSetLayout);
+    VkDescriptorSetAllocateInfo compDescSetAllocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, 0, descriptorPool, compSize, compLayouts.data()};
+    compDescSets.resize(compSize);
+    if (vkAllocateDescriptorSets(logicalDevice, &compDescSetAllocInfo, compDescSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate compute descriptor sets!");
+    }
+    VkDescriptorImageInfo compImgInfos[3] = {
+        {compImgSamplers[0], compImgViews[0], VK_IMAGE_LAYOUT_GENERAL},
+        {compImgSamplers[1], compImgViews[1], VK_IMAGE_LAYOUT_GENERAL},
+        {compImgSamplers[2], compImgViews[2], VK_IMAGE_LAYOUT_GENERAL},
+    };
+    VkWriteDescriptorSet compWrite[9] = {
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[0], 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[2], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[0], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[1], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[0], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[0], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[1], 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[0], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[1], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[2], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[1], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[1], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[2], 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[1], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[2], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[0], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, compDescSets[2], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[2], 0, 0}
+    };
+    vkUpdateDescriptorSets(logicalDevice, 9, compWrite, 0, 0);
 }
 

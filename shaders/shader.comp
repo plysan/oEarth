@@ -1,0 +1,26 @@
+#version 450
+
+#include "../vars.h"
+
+layout(local_size_x = 1, local_size_y = 1) in;
+layout(binding = 0, rgba16f) uniform writeonly image2D img0; // calculating height
+layout(binding = 1, rgba16f) uniform image2D img1;           // calculating normal
+layout(binding = 2, rgba16f) uniform readonly image2D img2;  // rendering
+
+void main() {
+    // from https://www.thanassis.space/wavePhysics.html
+    uint i = gl_GlobalInvocationID.x;
+    uint j = gl_GlobalInvocationID.y;
+    float img1Rin1 = imageLoad(img1, ivec2(i-1, j)).r;
+    float img1Rip1 = imageLoad(img1, ivec2(i+1, j)).r;
+    float img1Rjn1 = imageLoad(img1, ivec2(i, j-1)).r;
+    float img1Rjp1 = imageLoad(img1, ivec2(i, j+1)).r;
+    float val = 1 * ((img1Rin1 + img1Rip1 + img1Rjn1 + img1Rjp1) / 2
+                - imageLoad(img2, ivec2(gl_GlobalInvocationID.xy)).r);
+    imageStore(img0, ivec2(gl_GlobalInvocationID.xy), vec4(val, 0, 0, 0));
+
+    // calculate normal
+    float img1R = imageLoad(img1, ivec2(i, j)).r;
+    const float dx = 400 / pi2 * waveDomainSize / 1024 * 2 * 10000/*to preserve float16 precision*/;
+    imageStore(img1, ivec2(gl_GlobalInvocationID.xy), vec4(img1R, (img1Rin1 - img1Rip1) / dx, (img1Rjn1 - img1Rjp1) / dx, 0));
+}

@@ -1,17 +1,18 @@
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 #include <cstring>
-#include <vulkan/vulkan.h>
 
-void createStaticImage4(int width, int height, int depth, void *data, VkImage &image, VkDeviceMemory& imageMemory,
+void createInitialImage(int width, int height, int depth, VkFormat format, void *data, VkImage &image, VkDeviceMemory& imageMemory,
         VkDevice logicalDevice, VkPhysicalDevice phyDevice, VkQueue graphicsQueue, VkCommandPool commandPool);
 
 void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory,
         VkDevice logicalDevice, VkPhysicalDevice phyDevice);
 
-void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageLayout imageLayout, VkImageTiling tiling, VkImageUsageFlags usage,
         VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory, VkDevice logicalDevice, VkPhysicalDevice phyDevice);
 
 void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout,
-        VkDevice logicalDevice, VkQueue graphicsQueue, VkCommandPool commandPool);
+        VkDevice logicalDevice, VkQueue graphicsQueue, VkCommandPool commandPool, VkCommandBuffer cmdBuf, bool r2w);
 
 void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t depth,
         VkDevice logicalDevice, VkQueue graphicsQueue, VkCommandPool commandPool);
@@ -27,11 +28,12 @@ void CreateDebugUtilsMessengerEXT(VkInstance instance, const VkAllocationCallbac
 void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger, const VkAllocationCallbacks* pAllocator);
 
 void pickPhysicalDevice(VkInstance instance, VkPhysicalDevice &phyDevice, VkSurfaceKHR &surface, VkSurfaceCapabilitiesKHR &phyDevSurCaps,
-        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx, const std::vector<const char*> &requiredPhyDevExt, int uniformBufBlockSize);
+        int &phyDevGraphFamilyIdx, int &phyDevPresentFamilyIdx, int &phyDevComputeFamilyIdx,
+        const std::vector<const char*> &requiredPhyDevExt, int uniformBufBlockSize);
 
 void createLogicalDevice(VkPhysicalDevice phyDevice, VkDevice &logicalDevice, VkQueue &graphicsQueue, VkQueue &presentQueue,
-        const std::vector<const char*> &requiredValidationLayers, const std::vector<const char*> &requiredPhyDevExt,
-        int phyDevGraphFamilyIdx, int phyDevPresentFamilyIdx, bool enableValidationLayers);
+        VkQueue &computeQueue, const std::vector<const char*> &requiredValidationLayers, const std::vector<const char*> &requiredPhyDevExt,
+        int phyDevGraphFamilyIdx, int phyDevPresentFamilyIdx, int phyDevComputeFamilyIdx, bool enableValidationLayers);
 
 void createSwapChain(VkPhysicalDevice phyDevice, VkDevice logicalDevice,
         VkSwapchainKHR &swapChain, std::vector<VkImage> &swapChainImages, VkExtent2D &swapChainExtent, VkFormat &swapChainImageFormat,
@@ -41,12 +43,14 @@ VkImageView createImageView(VkDevice logicalDevice, VkImage image, VkFormat form
 
 void createRenderPass(VkPhysicalDevice phyDevice, VkDevice logicalDevice, VkRenderPass &renderPass, VkFormat swapChainImageFormat);
 
-void createDescriptorSetLayout(VkDevice logicalDevice, VkDescriptorSetLayout &descriptorSetLayout,
+void createDescriptorSetLayout(VkDevice logicalDevice, VkDescriptorSetLayout &descSetLayout,
         std::vector<VkDescriptorType> descriptorTypes, std::vector<VkShaderStageFlags> shaderStageFlags);
 
 void createGraphicsPipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLayout, VkPipeline &graphicsPipeline,
-        VkDescriptorSetLayout &descriptorSetLayout, VkRenderPass renderPass, VkExtent2D swapChainExtent, int vertInStride,
+        VkDescriptorSetLayout &descSetLayout, VkRenderPass renderPass, VkExtent2D swapChainExtent, int vertInStride,
         std::vector<int> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat);
+
+void createComputePipeline(VkDevice logicalDevice, VkPipelineLayout &pipelineLayout, VkPipeline &computePipeline, VkDescriptorSetLayout descSetLayout);
 
 void createCommandPool(VkDevice logicalDevice, VkCommandPool &commandPool, int phyDevGraphFamilyIdx);
 
@@ -60,6 +64,8 @@ void createSampler(VkPhysicalDevice phyDevice, VkDevice logicalDevice, VkSampler
 
 void createDescriptorPool(VkDevice logicalDevice, VkDescriptorPool &descriptorPool, int maxSets, std::vector<VkDescriptorPoolSize> poolSizes);
 
-void createDescriptorSets(VkDevice logicalDevice, VkDescriptorPool descriptorPool, uint32_t descSetCount, VkDescriptorSetLayout descriptorSetLayout,
-        std::vector<VkDescriptorSet> &descriptorSets, std::vector<VkBuffer> &uniformBuffers, int uniformBufferSize,
-        const std::vector<VkImageView> &imageViews, const std::vector<VkSampler> &samplers);
+void createDescriptorSets(VkDevice logicalDevice, VkDescriptorPool descriptorPool, uint32_t descSetCount, uint32_t swapchainCount,
+        VkDescriptorSetLayout gDescSetLayout, VkDescriptorSetLayout cDescSetLayout,
+        std::vector<VkDescriptorSet> &renderDescSets, std::vector<VkDescriptorSet> &compDescSets,
+        std::vector<VkBuffer> &uniformBuffers, int uniformBufferSize, const std::vector<VkImageView> &imageViews,
+        const std::vector<VkSampler> &samplers, std::vector<VkImageView> compImgViews, std::vector<VkSampler> compImgSamplers);

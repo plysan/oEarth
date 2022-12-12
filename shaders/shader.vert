@@ -31,7 +31,6 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     float time;
 } ubo;
 
-
 float atmosphere_radius_square = atmosphereTopRadius * atmosphereTopRadius;
 float scatter_height = (length((ubo.view * vec4(-ubo.word_offset, 1.0)).xyz) - earthRadius) / atmosphereThickness;
 float green_pow_coefficient = 1 / pow(greenAvgWlength/redAvgWlength, 4);
@@ -79,19 +78,21 @@ void handle_water(inout vec3 vertex_pos_cs) {
 
     float cos_zenith = dot(down_n_cs, normalize(vertex_pos_cs));
     float pix_span = cam_vertex_length * dPixZenith / cos_zenith;
-    float dLat = pix_span * dot(lat_n_cs, normalize(dir_coord)) * (pi2 / waveDomainSize);
-    float dLng = pix_span * dot(lng_n_cs, normalize(dir_coord)) * (pi2 / waveDomainSize);
+    const float worldToFreqCoe = pi2 / waveDomainSize;
+    float dLat = pix_span * dot(lat_n_cs, normalize(dir_coord)) * worldToFreqCoe;
+    float dLng = pix_span * dot(lng_n_cs, normalize(dir_coord)) * worldToFreqCoe;
     cam_param = vec3(dLat, dLng, pix_span);
 
     float wave_size_v = wave_v0;
     if (cam_vertex_length / wave_size_v > 200) {
         wave_size_v *= 1 - smoothstep(200, 300, cam_vertex_length / wave_v0) / 100;
     }
-    float lat_param = ubo.word_offset_coord.x + lat_dist * (pi2 / waveDomainSize);
-    float lng_param = ubo.word_offset_coord.y + lng_dist * (pi2 / waveDomainSize);
+    float lat_param = ubo.word_offset_coord.x + lat_dist * worldToFreqCoe;
+    float lng_param = ubo.word_offset_coord.y + lng_dist * worldToFreqCoe;
     fragTexCoord = vec2(lat_param, lng_param);
 
-    float water_height = (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
+    float compH = texture(compImg, fragTexCoord/400 + vec2(0.5)).r;
+    float water_height = compH * 0.0001 + (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
 
     gl_Position = ubo.proj * vec4(((ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
 }
