@@ -37,10 +37,10 @@ float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
 
 vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
-    vec4 compH = texture(compImg, fragTexCoord/400 + vec2(0.5));
+    vec4 compH = texture(compNorImg, fragTexCoord/400 + vec2(0.5));
     vec3 surface_n_cs = normalize(world_offset_n_cs
-            + (compH.g - cos((fragTexCoord.x + delta.x) / wave_h_domain + ubo.time) * h_coe) * lat_n_cs
-            + (compH.b - cos((fragTexCoord.y + delta.y) / wave_h_domain + ubo.time) * h_coe) * lng_n_cs);
+            + (compH.x - cos((fragTexCoord.x + delta.x) / wave_h_domain + ubo.time) * h_coe) * lat_n_cs
+            + (compH.y - cos((fragTexCoord.y + delta.y) / wave_h_domain + ubo.time) * h_coe) * lng_n_cs);
     float fresnel_sun = 0.02 + 0.98 * pow(1.0 - dot(sun_n_cs, surface_n_cs), 5.0); // Schlick's approximation
     ref_port_sun = exp(-10000 * pow(length(cross(facet_n_cs, surface_n_cs)), 4));
     ref_port_sun = fresnel_sun * ref_port_sun;

@@ -91,7 +91,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
     float lng_param = ubo.word_offset_coord.y + lng_dist * worldToFreqCoe;
     fragTexCoord = vec2(lat_param, lng_param);
 
-    float compH = texture(compImg, fragTexCoord/400 + vec2(0.5)).r;
+    float compH = texture(compImg, fragTexCoord/400 + vec2(0.5)).x;
     float water_height = compH * 0.0001 + (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
 
     gl_Position = ubo.proj * vec4(((ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);

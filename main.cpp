@@ -104,16 +104,12 @@ private:
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
     VkSurfaceKHR surface;
-    VkDevice logicalDevice;
     VkSwapchainKHR swapChain;
     std::vector<VkImageView> swapChainImageViews;
     VkRenderPass renderPass;
     VkDescriptorSetLayout gDescSetLayout;
-    VkDescriptorSetLayout cDescSetLayout;
     VkPipelineLayout gPipelineLayout;
-    VkPipelineLayout cPipelineLayout;
     VkPipeline graphicsPipeline;
-    VkPipeline computePipeline;
     std::vector<VkFramebuffer> swapChainFramebuffers;
     VkCommandPool commandPool;
     VkBuffer vertexBuffer;
@@ -145,7 +141,6 @@ private:
     VkDeviceMemory terrainImageSBM;
 
     // stuff cleanup free
-    VkPhysicalDevice phyDevice = VK_NULL_HANDLE;
     int phyDevGraphFamilyIdx = -1, phyDevPresentFamilyIdx = -1, phyDevComputeFamilyIdx = -1;
     VkSurfaceCapabilitiesKHR phyDevSurCaps;
     VkQueue graphicsQueue;
@@ -162,7 +157,6 @@ private:
     size_t currentFrame = 0;
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> renderDescSets;
-    std::vector<VkDescriptorSet> compDescSets;
     StagingBufferStruct sbs;
     glm::vec3 initPos = coord2Pos(42.226f, 3.147f, 0.00001f);
     Camera camera{
@@ -189,42 +183,39 @@ private:
         if (enableValidationLayers) CreateDebugUtilsMessengerEXT(instance, nullptr, &debugMessenger);
         if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS)
             throw std::runtime_error("failed to create window surface!");
-        pickPhysicalDevice(instance, phyDevice, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx,
+        pickPhysicalDevice(instance,surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx,
                            phyDevComputeFamilyIdx, requiredPhyDevExt, sizeof(FrameParam));
-        createLogicalDevice(phyDevice, logicalDevice, graphicsQueue, presentQueue, computeQueue,
+        createLogicalDevice(graphicsQueue, presentQueue, computeQueue,
                             requiredValidationLayers, requiredPhyDevExt,
                             phyDevGraphFamilyIdx, phyDevPresentFamilyIdx, phyDevComputeFamilyIdx, enableValidationLayers);
-        createSwapChain(phyDevice, logicalDevice, swapChain, swapChainImages, swapChainExtent, swapChainImageFormat,
+        createSwapChain(swapChain, swapChainImages, swapChainExtent, swapChainImageFormat,
                         window, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx);
         createImageViews();
-        createRenderPass(phyDevice, logicalDevice, renderPass, swapChainImageFormat);
-        createDescriptorSetLayout(logicalDevice, cDescSetLayout,
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                {VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT});
-        createComputePipeline(logicalDevice, cPipelineLayout, computePipeline, cDescSetLayout);
-        createDescriptorSetLayout(logicalDevice, gDescSetLayout,
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL});
-        createGraphicsPipeline(logicalDevice, gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent, sizeof(Vertex),
+        createRenderPass(renderPass, swapChainImageFormat);
+        createDescriptorSetLayout(gDescSetLayout,
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL});
+        createGraphicsPipeline(gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent, sizeof(Vertex),
                 {offsetof(Vertex, pos), offsetof(Vertex, normal), offsetof(Vertex, texCoord)},
                 {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT});
-        createCommandPool(logicalDevice, commandPool, phyDevGraphFamilyIdx);
-        createDepthResources(phyDevice, logicalDevice, swapChainExtent, depthImage, depthImageMemory, depthImageView);
-        createFramebuffers(logicalDevice, renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
+        createCommandPool(commandPool, phyDevGraphFamilyIdx);
+        createDepthResources(swapChainExtent, depthImage, depthImageMemory, depthImageView);
+        createFramebuffers(renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
         createStagingBufferStruct();
-        terrainImageView = createImageView(logicalDevice, terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 2);
-        scatterImageView = createImageView(logicalDevice, scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 3);
-        createSampler(phyDevice, logicalDevice, terrainSampler);
-        createSampler(phyDevice, logicalDevice, scatterSampler);
+        terrainImageView = createImageView(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 2);
+        scatterImageView = createImageView(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 3);
+        createSampler(terrainSampler);
+        createSampler(scatterSampler);
         createUniformBuffers();
-        water_grid.createImgs(logicalDevice, phyDevice, computeQueue, commandPool);
-        uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgCount;
-        createDescriptorPool(logicalDevice, descriptorPool, descSetCount + water_grid.compImgCount/*render + compute*/, {
+        water_grid.createImgs(computeQueue, commandPool);
+        uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
+        createDescriptorPool(descriptorPool, descSetCount, {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 3/*terrain + scatter + comp*/},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, water_grid.compImgCount * 3/*image count in water shader*/}});
-        createDescriptorSets(logicalDevice, descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, cDescSetLayout, renderDescSets, compDescSets,
-                uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid.compImgViews, water_grid.compImgSamplers);
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 4/*terrain + scatter + comp + compNormal*/}});
+        createDescriptorSets(descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
+                uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
+        water_grid.init(swapChainImages.size());
         createCommandBuffers();
         createSyncObjects();
         std::thread t1(&VKDemo::updateStagingBufferStruct, this);
@@ -233,6 +224,34 @@ private:
         std::thread t2(&VKDemo::displayFps, this);
         t2.detach();
 #endif
+    }
+
+    void recreateSwapChain() {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+        vkDeviceWaitIdle(logicalDevice);
+        cleanupSwapChain();
+        createSwapChain(swapChain, swapChainImages, swapChainExtent, swapChainImageFormat,
+                        window, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx);
+        createImageViews();
+        createRenderPass(renderPass, swapChainImageFormat);
+        createGraphicsPipeline(gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent, sizeof(Vertex),
+                {offsetof(Vertex, pos), offsetof(Vertex, normal), offsetof(Vertex, texCoord)},
+                {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT});
+        createDepthResources(swapChainExtent, depthImage, depthImageMemory, depthImageView);
+        createFramebuffers(renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
+        createUniformBuffers();
+        uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
+        createDescriptorPool(descriptorPool, descSetCount, {
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 4/*terrain + scatter + comp + compNormal*/}});
+        createDescriptorSets(descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
+                uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
+        createCommandBuffers();
     }
 
     void displayFps() {
@@ -249,39 +268,10 @@ private:
         initInvParam();
     }
 
-    void recreateSwapChain() {
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-        while (width == 0 || height == 0) {
-            glfwGetFramebufferSize(window, &width, &height);
-            glfwWaitEvents();
-        }
-        vkDeviceWaitIdle(logicalDevice);
-        cleanupSwapChain();
-        createSwapChain(phyDevice, logicalDevice, swapChain, swapChainImages, swapChainExtent, swapChainImageFormat,
-                        window, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx);
-        createImageViews();
-        createRenderPass(phyDevice, logicalDevice, renderPass, swapChainImageFormat);
-        createGraphicsPipeline(logicalDevice, gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent, sizeof(Vertex),
-                {offsetof(Vertex, pos), offsetof(Vertex, normal), offsetof(Vertex, texCoord)},
-                {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT});
-        createDepthResources(phyDevice, logicalDevice, swapChainExtent, depthImage, depthImageMemory, depthImageView);
-        createFramebuffers(logicalDevice, renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
-        createUniformBuffers();
-        uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgCount;
-        createDescriptorPool(logicalDevice, descriptorPool, descSetCount + water_grid.compImgCount/*render + compute*/, {
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 3/*terrain + scatter + comp*/},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, water_grid.compImgCount * 3/*image count in water shader*/}});
-        createDescriptorSets(logicalDevice, descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, cDescSetLayout, renderDescSets, compDescSets,
-                uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid.compImgViews, water_grid.compImgSamplers);
-        createCommandBuffers();
-    }
-
     void createImageViews() {
         swapChainImageViews.resize(swapChainImages.size());
         for (size_t i = 0; i < swapChainImages.size(); i++) {
-            swapChainImageViews[i] = createImageView(logicalDevice, swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 2);
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 2);
         }
     }
 
@@ -369,7 +359,7 @@ private:
         skyDome.genScatterTexure();
         uint32_t scatter_texture_size = scatterTextureSunAngleSize * scatterTextureHeightSize;
         createInitialImage(scatter_texture_size, scatter_texture_size, scatter_texture_size, VK_FORMAT_R8G8B8A8_SRGB, skyDome.scatterTexture.data,
-                scatterImage, scatterImageMemory, logicalDevice, phyDevice, graphicsQueue, commandPool);
+                scatterImage, scatterImageMemory, graphicsQueue, commandPool);
     }
 
     void updateStagingBufferStruct() {
@@ -417,25 +407,25 @@ private:
         std::cout << "Allocate vertex size: " << sizeof(Vertex) << " x " << (sbs.terrainVertMax + sbs.skyVertMax + sbs.skyIdxMax) << " = " << vertBufferSize << '\n';
         createBuffer(vertBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                vertStagingBuffer, vertStagingBufferMemory, logicalDevice, phyDevice);
+                vertStagingBuffer, vertStagingBufferMemory);
         createBuffer(vertBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory, logicalDevice, phyDevice);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
         VkDeviceSize indexBufferSize = sizeof(int) * (sbs.skyIdxMax + sbs.water_idx_max);
         std::cout << "Allocate index size: " << sizeof(int) << " x " << sbs.skyIdxMax << " = " << indexBufferSize << '\n';
         createBuffer(indexBufferSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory, logicalDevice, phyDevice);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
     }
 
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, int srcOffset, int dstOffset, VkDeviceSize size) {
-        VkCommandBuffer commandBuffer = beginSingleTimeCommands(logicalDevice, commandPool);
+        VkCommandBuffer commandBuffer = beginSingleTimeCommands(commandPool);
         VkBufferCopy copyRegion{};
         copyRegion.srcOffset = srcOffset;
         copyRegion.dstOffset = dstOffset;
         copyRegion.size = size;
         vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-        endSingleTimeCommands(logicalDevice, graphicsQueue, commandBuffer, commandPool);
+        endSingleTimeCommands(graphicsQueue, commandBuffer, commandPool);
     }
 
     void createUniformBuffers() {
@@ -449,13 +439,13 @@ private:
             createBuffer(bufferSize,
                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    uniformBuffers[i], uniformBuffersMemory[i], logicalDevice, phyDevice);
+                    uniformBuffers[i], uniformBuffersMemory[i]);
             vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersData[i]);
         }
     }
 
     void createCommandBuffers() {
-        commandBuffers.resize(swapChainFramebuffers.size() * water_grid.compImgCount);
+        commandBuffers.resize(swapChainFramebuffers.size() * water_grid.compImgSets);
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.commandPool = commandPool;
@@ -465,7 +455,7 @@ private:
             throw std::runtime_error("failed to allocate command buffers!");
         }
 
-        for (size_t j = 0; j < water_grid.compImgCount; j++) {
+        for (size_t j = 0; j < water_grid.compImgSets; j++) {
             for (size_t i = 0; i < swapChainFramebuffers.size(); i++) {
                 int cmdBufIdx = swapChainFramebuffers.size() * j + i;
                 VkCommandBufferBeginInfo beginInfo{};
@@ -508,13 +498,7 @@ private:
                 vkCmdDrawIndexedIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], water_offset, 1, 0);
                 vkCmdEndRenderPass(commandBuffers[cmdBufIdx]);
                 // compute
-                vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
-                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_COMPUTE, cPipelineLayout, 0, 1, &compDescSets[j], 0, 0);
-                //transitionImageLayout(compImgs.at(j), VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                //        logicalDevice, computeQueue, commandPool, commandBuffers[cmdBufIdx], false);
-                //transitionImageLayout(compImgs.at((j + 1) % 2), VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                //        logicalDevice, computeQueue, commandPool, commandBuffers[cmdBufIdx], true);
-                vkCmdDispatch(commandBuffers[cmdBufIdx], 1024, 1024, 1);
+                water_grid.recordCmd(commandBuffers[cmdBufIdx], j);
                 if (vkEndCommandBuffer(commandBuffers[cmdBufIdx]) != VK_SUCCESS) {
                     throw std::runtime_error("failed to record command buffer!");
                 }
@@ -539,10 +523,10 @@ private:
                         sizeof(int) * sbs.skyIdxMax, sizeof(int) * std::min((int)water_grid.indices.size(), sbs.water_idx_max));
             }
             transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    logicalDevice, graphicsQueue, commandPool, NULL, 0);
-            copyBufferToImage(terrainImageBuf, terrainImage, globe.mega_texture.w, globe.mega_texture.h, 1, logicalDevice, graphicsQueue, commandPool);
+                    graphicsQueue, commandPool, NULL, 0);
+            copyBufferToImage(terrainImageBuf, terrainImage, globe.mega_texture.w, globe.mega_texture.h, 1, graphicsQueue, commandPool);
             transitionImageLayout(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    logicalDevice, graphicsQueue, commandPool, NULL, 0);
+                    graphicsQueue, commandPool, NULL, 0);
             std::cout << "Copy size: " << globe.vertices.size() << '\n';
             fParams[0].wordOffset = globe.camOffset;
             fParams[1].wordOffset = glm::vec3(0);
@@ -577,7 +561,7 @@ private:
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
         submitInfo.commandBufferCount = 1;
-        int cmdBufOffset = compSwitch++ % water_grid.compImgCount * swapChainImages.size();
+        int cmdBufOffset = compSwitch++ % water_grid.compImgSets * swapChainImages.size();
         submitInfo.pCommandBuffers = &commandBuffers[imageIndex + cmdBufOffset];
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
         submitInfo.signalSemaphoreCount = 1;
@@ -697,11 +681,11 @@ private:
 
         createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                terrainImageBuf, terrainImageSBM, logicalDevice, phyDevice);
+                terrainImageBuf, terrainImageSBM);
         void* data;
         createImage(imageW, imageH, 1, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, terrainImage, terrainImageMemory, logicalDevice, phyDevice);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, terrainImage, terrainImageMemory);
     }
 
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
