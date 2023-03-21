@@ -260,6 +260,8 @@ std::vector<const char*> getRequiredInstanceExtensionsChecked(bool enableValidat
     const char** glfwExtensions;
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     std::vector<const char*> requiredExtensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+    requiredExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    requiredExtensions.push_back("VK_KHR_get_physical_device_properties2");
     if (enableValidationLayers) {
         requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
@@ -337,6 +339,7 @@ void createInstance(VkInstance &instance, const std::vector<const char*> require
     appInfo.apiVersion = VK_API_VERSION_1_0;
 
     VkInstanceCreateInfo createInfo{};
+    createInfo.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
@@ -344,10 +347,12 @@ void createInstance(VkInstance &instance, const std::vector<const char*> require
     createInfo.enabledExtensionCount = requiredExtensions.size();
     createInfo.ppEnabledExtensionNames = requiredExtensions.data();
 
+    std::vector<const char*> layers;// = {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME};
     if (enableValidationLayers) {
         checkValidationLayerSupport(requiredValidationLayers);
-        createInfo.enabledLayerCount = static_cast<uint32_t>(requiredValidationLayers.size());
-        createInfo.ppEnabledLayerNames = requiredValidationLayers.data();
+        layers.insert(layers.end(), requiredValidationLayers.begin(), requiredValidationLayers.end());
+        createInfo.enabledLayerCount = static_cast<uint32_t>(layers.size());
+        createInfo.ppEnabledLayerNames = layers.data();
         VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = createDebugMessengerCreateInfo();
         createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
         std::cout << "Validation layer enabled\n";

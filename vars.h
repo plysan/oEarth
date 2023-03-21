@@ -18,7 +18,7 @@ const float redAvgWlength = 0.685;
 const float greenAvgWlength = 0.5325;
 const float blueAvgWlength = 0.4725;
 const float waveDomainSize = 0.00001f;
-const float compDomainSize = 0.0001f;
+const int compDomainsPerDegree = 1000;
 const float pi = 3.141592653589793;
 const float pi2 = 2 * pi;
 

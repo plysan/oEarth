@@ -37,17 +37,14 @@ void WaterGrid::init(int swapImgCount) {
     assert(sizeof(WaterParam) % ubAlign == 0);
 
     createDescriptorSetLayout(descSetLayout,
-            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC},
-            {VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT});
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC},
+            {VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT, VK_SHADER_STAGE_COMPUTE_BIT});
     createComputePipeline(pip, pipLayout, descSetLayout);
     createDescriptorPool(descPool, compImgSets, {
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, compImgSets * 1},
                 //{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0/*comp + compNormal*/},
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, compImgSets * 4/*image count in water shader*/}});
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, compImgSets * 3/*image count in water shader*/}});
 
-    waterParam[0].stage = 0;
-    waterParam[1].stage = 1;
-    waterParam[2].stage = 2;
     VkDeviceSize bufferSize = sizeof(WaterParam) * compImgStages;
     uBufs.resize(swapImgCount);
     uBufMems.resize(swapImgCount);
@@ -59,10 +56,9 @@ void WaterGrid::init(int swapImgCount) {
                 uBufs[i], uBufMems[i]);
         vkMapMemory(logicalDevice, uBufMems[i], 0, bufferSize, 0, &uBufDatas[i]);
         memcpy(uBufDatas[i], waterParam, bufferSize);
-        vkUnmapMemory(logicalDevice, uBufMems[i]);
     }
 
-    assert(compImgSets == 1);
+    assert(compImgSets == 2);
     std::vector<VkDescriptorSetLayout> compLayouts(compImgSets, descSetLayout);
     VkDescriptorSetAllocateInfo compDescSetAllocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, 0, descPool, compImgSets, compLayouts.data()};
     descSets.resize(compImgSets);
@@ -72,21 +68,38 @@ void WaterGrid::init(int swapImgCount) {
     VkDescriptorImageInfo compImgInfos[3] = {
         {compImgSamplers[0], compImgViews[0], VK_IMAGE_LAYOUT_GENERAL},
         {compImgSamplers[1], compImgViews[1], VK_IMAGE_LAYOUT_GENERAL},
-        {compImgSamplers[2], compImgViews[2], VK_IMAGE_LAYOUT_GENERAL},
     };
     VkDescriptorImageInfo compNorImgInfo{normalSampler, normalImgView, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet compWrite[4] = {
+    VkWriteDescriptorSet compWrite[6] = {
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[0], 0, 0},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[1], 0, 0},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[2], 0, 0},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compNorImgInfo, 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compNorImgInfo, 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[1], 0, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[1], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[1], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compImgInfos[0], 0, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[1], 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &compNorImgInfo, 0, 0},
     };
-    vkUpdateDescriptorSets(logicalDevice, 4, compWrite, 0, 0);
+    vkUpdateDescriptorSets(logicalDevice, 6, compWrite, 0, 0);
 
     VkDescriptorBufferInfo bufInfo{uBufs[0], 0, sizeof(WaterParam)};
-    VkWriteDescriptorSet bufInfoWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 4, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 0, &bufInfo, 0};
-    vkUpdateDescriptorSets(logicalDevice, 1, &bufInfoWrite, 0, 0);
+    VkWriteDescriptorSet bufInfoWrite[2] = {
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[0], 3, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 0, &bufInfo, 0},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, descSets[1], 3, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 0, &bufInfo, 0},
+    };
+    vkUpdateDescriptorSets(logicalDevice, 2, bufInfoWrite, 0, 0);
 
+}
+
+glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 word_offset_coord, double cos_lat) {
+    glm::dvec2 waterOffset = word_offset_coord * static_cast<double>(gridsPerDegree);
+    waterOffset.y *= cos_lat;
+    glm::ivec2 waterIOffset = glm::round(waterOffset);
+    static glm::ivec2 waterIOffsetOld = waterIOffset;
+    glm::dvec2 waterOffsetFrac = waterOffset - (glm::dvec2)waterIOffset;
+    glm::ivec2 waterIOffsetDel = waterIOffset - waterIOffsetOld;
+    waterIOffsetOld = waterIOffset;
+    waterParam[0].wOffset = waterIOffsetDel;
+    memcpy(uBufDatas[0], waterParam, sizeof(glm::ivec2));
+    return waterOffsetFrac / static_cast<double>(gridsPerDegree);
 }
 
 void WaterGrid::genWaterGrid(int x, int y) {
@@ -134,6 +147,11 @@ void WaterGrid::createImgs(VkQueue queue, VkCommandPool commandPool) {
                     data[(res * k + j) * 4] = 0.4f - glm::sqrt(d2/100)/10;
                 }
             }
+            if (j < 400 || j > 500) {
+                for (int k = 300; k < 450; k++) {
+                    data[(res * k + j) * 4 + 3] = 0.9f;
+                }
+            }
         }
         createInitialImage(res, res, 1, VK_FORMAT_R32G32B32A32_SFLOAT, data.data(),
                 compImgs.at(i), compImgMems.at(i), queue, commandPool);
@@ -154,18 +172,8 @@ void pipBarrierWR(VkCommandBuffer cmdBuf, VkImage image) {
 }
 
 void WaterGrid::recordCmd(VkCommandBuffer cmdBuf, int descSetNum) {
-    uint32_t dynamicOffset = 0;
-    static uint32_t del = sizeof(WaterParam);
+    static uint32_t dynOffset = 0;
     vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pip);
-    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipLayout, 0, 1, &descSets[descSetNum], 1, &dynamicOffset);
-    vkCmdDispatch(cmdBuf, res, res, 1);
-    dynamicOffset += del;
-    //pipBarrierWR(cmdBuf, compImgs[1]);
-    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipLayout, 0, 1, &descSets[descSetNum], 1, &dynamicOffset);
-    vkCmdDispatch(cmdBuf, res, res, 1);
-    dynamicOffset += del;
-    //pipBarrierWR(cmdBuf, compImgs[2]);
-    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipLayout, 0, 1, &descSets[descSetNum], 1, &dynamicOffset);
-    vkCmdDispatch(cmdBuf, res, res, 1);
-    //pipBarrierWR(cmdBuf, compImgs[0]);
+    vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipLayout, 0, 1, &descSets[descSetNum], 1, &dynOffset);
+    vkCmdDispatch(cmdBuf, res/8, res/8, 1);
 }

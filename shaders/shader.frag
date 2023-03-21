@@ -14,6 +14,7 @@ layout(location = 6) in vec3 lng_n_cs;
 layout(location = 7) in vec3 vertex_pos_n_cs;
 layout(location = 8) in float cam_vertex_length;
 layout(location = 9) in vec3 cam_param; // (dlat, dlng, pix_span)
+layout(location = 10) in vec2 waterOffsetCoord;
 layout(binding = 1) uniform sampler2D texSampler;
 
 layout(std140, binding = 0) uniform UniformBufferObject {
@@ -25,6 +26,7 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     vec3 word_offset;
     int target;
     vec2 word_offset_coord;
+    vec2 terrainOffset;
     float height;
     float time;
 } ubo;
@@ -37,7 +39,7 @@ float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
 
 vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
-    vec4 compH = texture(compNorImg, fragTexCoord/400 + vec2(0.5));
+    vec4 compH = texture(compNorImg, waterOffsetCoord);
     vec3 surface_n_cs = normalize(world_offset_n_cs
             + (compH.x - cos((fragTexCoord.x + delta.x) / wave_h_domain + ubo.time) * h_coe) * lat_n_cs
             + (compH.y - cos((fragTexCoord.y + delta.y) / wave_h_domain + ubo.time) * h_coe) * lng_n_cs);

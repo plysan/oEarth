@@ -2,51 +2,51 @@
 
 #include "../vars.h"
 
-layout(local_size_x = 1, local_size_y = 1) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 // x:height y:grid-x z:grid-y
-layout(binding = 0, rgba32f) uniform image2D img0;      // advect(0)---- [img0] <--update_velocity(2)
-layout(binding = 1, rgba32f) uniform image2D img1;      //    |                            |
-layout(binding = 2, rgba32f) uniform image2D img2;      //    ↓                            |
-layout(binding = 3, rg16f) uniform image2D normalImg;   // [img1] --update_height(1)--> [img2] -(2)-> [normalImg]
-layout(std140, binding = 4) uniform UniformBufferObject {
+layout(binding = 0, rgba32f) uniform image2D imgIn;
+layout(binding = 1, rgba32f) uniform image2D imgOut;
+layout(binding = 2, rg16f) uniform image2D normalImg;
+layout(std140, binding = 3) uniform UniformBufferObject {
+    ivec2 wOffset;
     int stage;
 } ubo;
 
+shared vec4 imgCache[10][10];
+
 void main() {
     const float depth = -1.0;
-    const float dt = 0.08;
+    const float dt = 0.005;
     ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
+    ivec2 cxy = ivec2(lxy + ivec2(1));
 
-    // img1 -> img2: update height
-    if (ubo.stage == 1) {
-        vec4 p = imageLoad(img1, xy);
-        vec4 pxn = imageLoad(img1, ivec2(xy.x + 1, xy.y));
-        vec4 pyn = imageLoad(img1, ivec2(xy.x, xy.y + 1));
-        p.x -= depth; pxn.x -= depth; pyn.x -= depth;
-        p.x -= p.x * ((pxn.y - p.y + pyn.z - p.z)) * dt;
-        p.x += depth;
-        imageStore(img2, xy, p);
+    imgCache[cxy.x][cxy.y] = imageLoad(imgIn, xy + ubo.wOffset);
+    if (lxy.x % 8 == 0) {
+        imgCache[0][cxy.y] = imageLoad(imgIn, ivec2(xy.x-1, xy.y) + ubo.wOffset);
     }
-
-    // img0 -> img1: advect
-    if (ubo.stage == 0) {
-        vec4 p = imageLoad(img0, xy);
-        //TODO optional advection
-        imageStore(img1, xy, p);
+    if (lxy.x % 8 == 7) {
+        imgCache[9][cxy.y] = imageLoad(imgIn, ivec2(xy.x+1, xy.y) + ubo.wOffset);
     }
-
-    // img2 -> img0: update velocity
-    //TODO consider bathymetry
-    if (ubo.stage == 2) {
-        vec4 p = imageLoad(img2, xy);
-        vec4 pxn = imageLoad(img2, ivec2(xy.x - 1, xy.y));
-        vec4 pyn = imageLoad(img2, ivec2(xy.x, xy.y - 1));
-        // img2 -> normal
-        imageStore(normalImg, xy, vec4((p.x - pxn.x) * 50, (p.x - pyn.x) * 50, 0, 0));
-        p.x -= depth; pxn.x -= depth; pyn.x -= depth;
-        p.y += 9.8 * ((pxn.x - p.x)) * dt;
-        p.z += 9.8 * ((pyn.x - p.x)) * dt;
-        p.x += depth;
-        imageStore(img0, xy, p);
+    if (lxy.y % 8 == 0) {
+        imgCache[cxy.x][0] = imageLoad(imgIn, ivec2(xy.x, xy.y-1) + ubo.wOffset);
     }
+    if (lxy.y % 8 == 7) {
+        imgCache[cxy.x][9] = imageLoad(imgIn, ivec2(xy.x, xy.y+1) + ubo.wOffset);
+    }
+    vec4 p = imgCache[cxy.x][cxy.y];
+    vec4 pxn = imgCache[cxy.x+1][cxy.y];
+    vec4 pyn = imgCache[cxy.x][cxy.y+1];
+    p.x -= depth + p.w; pxn.x -= depth + pxn.w; pyn.x -= depth + pyn.w;
+    p.x -= p.x * ((pxn.y - p.y + pyn.z - p.z)) * dt;
+    p.x += depth + p.w;
+    imgCache[cxy.x][cxy.y] = p;
+    pxn = imgCache[cxy.x-1][cxy.y];
+    pyn = imgCache[cxy.x][cxy.y-1];
+    imageStore(normalImg, xy, vec4((p.x - pxn.x) * 30, (p.x - pyn.x) * 30, 0, 0));
+    p.x -= depth; pxn.x -= depth; pyn.x -= depth;
+    p.y += 9.8 * ((pxn.x - p.x)) * dt;
+    p.z += 9.8 * ((pyn.x - p.x)) * dt;
+    p.x += depth;
+    imageStore(imgOut, xy, p);
 }

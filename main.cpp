@@ -40,6 +40,7 @@ struct FrameParam {
     glm::vec3 wordOffset;
     int target;
     glm::vec2 word_offset_coord;
+    glm::vec2 waterOffset;
     float height;
     float time;
     union {
@@ -49,7 +50,7 @@ struct FrameParam {
     };
     glm::mat4 pad1;
     glm::mat4 pad2;
-    glm::vec3 pad3;
+    float pad3;
 };
 
 struct StagingBufferStruct {
@@ -76,7 +77,8 @@ class VKDemo {
     };
 
     const std::vector<const char*> requiredPhyDevExt = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        //"VK_KHR_portability_subset",
     };
 
 #ifdef NDEBUG
@@ -146,7 +148,6 @@ private:
     VkQueue graphicsQueue;
     VkQueue presentQueue;
     VkQueue computeQueue;
-    int compSwitch = 0;
     std::vector<VkImage> swapChainImages;
     VkExtent2D swapChainExtent;
     VkFormat swapChainImageFormat;
@@ -344,15 +345,16 @@ private:
         sbs.terrainVertMax = 500000;
         sbs.skyVertMax = 25000;
         sbs.skyIdxMax = 25000;
-        sbs.water_vert_max = 150000;
-        sbs.water_idx_max = 150000;
+        sbs.water_vert_max = 400000;
+        sbs.water_idx_max = 2300000;
         lastCameraPos = camera.pos;
         globe.genGlobe(lastCameraPos);
         sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
         skyDome.genSkyDome(lastCameraPos);
         sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
-        water_grid.genWaterGrid(200, 120);
-        sbs.water_idx_size = std::min(sbs.water_vert_max, (int)water_grid.indices.size());
+        water_grid.genWaterGrid(800, 480);
+        std::cout << ">>>>>>>>water_grid.indices.size: " << (int)water_grid.indices.size() << '\n';
+        sbs.water_idx_size = std::min(sbs.water_idx_max, (int)water_grid.indices.size());
         createTerrainImage(globe);
         createVertBuffers();
         stageVertBuffers(true);
@@ -485,8 +487,8 @@ private:
                 vkCmdBindIndexBuffer(commandBuffers[cmdBufIdx], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
                 uint32_t dynamicOffset = 0;
                 vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dynamicOffset);
-                VkDeviceSize terrainOffset = offsetof(struct FrameParam, terrainParam);
-                vkCmdDrawIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], terrainOffset, 1, 0);
+                VkDeviceSize waterOffset = offsetof(struct FrameParam, terrainParam);
+                vkCmdDrawIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], waterOffset, 1, 0);
                 dynamicOffset = sizeof(FrameParam);
                 vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dynamicOffset);
                 VkDeviceSize skyOffset = dynamicOffset + offsetof(struct FrameParam, skyParam);
@@ -561,7 +563,8 @@ private:
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
         submitInfo.commandBufferCount = 1;
-        int cmdBufOffset = compSwitch++ % water_grid.compImgSets * swapChainImages.size();
+        static int compSwitch = 0;
+        int cmdBufOffset = (compSwitch++ % water_grid.compImgSets) * swapChainImages.size();
         submitInfo.pCommandBuffers = &commandBuffers[imageIndex + cmdBufOffset];
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
         submitInfo.signalSemaphoreCount = 1;
@@ -648,6 +651,7 @@ private:
         glm::dvec2 word_offset_coord = dPos2DCoord(camera.pos);
         static double pi2 = glm::pi<double>() * 2;
         double cos_lat = glm::cos(word_offset_coord.x);
+        fParams[2].waterOffset = water_grid.updateWOffset(word_offset_coord, cos_lat);
         static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);
         word_offset_coord = glm::fmod(word_offset_coord / waveRectSize * pi2, pi2);
         fParams[2].word_offset_coord = word_offset_coord;

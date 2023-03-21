@@ -6,12 +6,17 @@
 #include <vulkan/vulkan.h>
 
 #include "common.h"
+#include "../vars.h"
 
 struct WaterParam {
+    glm::ivec2 wOffset;
     int stage;
-    int dummy1;
-    int dummy2;
-    int dummy3;
+    glm::mat3 d0;
+    glm::mat4 d1;
+    glm::mat4 d2;
+    glm::mat4 d3;
+    glm::vec3 v0;
+    float v1;
 };
 
 struct WaterGrid {
@@ -25,15 +30,16 @@ struct WaterGrid {
     std::vector<VkDeviceMemory> compImgMems;
     std::vector<VkImageView> compImgViews;
     std::vector<VkSampler> compImgSamplers;
-    uint32_t compImgCount = 3;
-    uint32_t compImgSets = 1;
-    uint32_t compImgStages = 3;
+    uint32_t compImgCount = 2;
+    uint32_t compImgSets = 2;
+    uint32_t compImgStages = 1;
     VkImage normalImg;
     VkDeviceMemory normalImgMem;
     VkImageView normalImgView;
     VkSampler normalSampler;
     int res = 1024;
-    WaterParam waterParam[3];
+    long gridsPerDegree = res * (long)compDomainsPerDegree;
+    WaterParam waterParam[1];
     std::vector<VkBuffer> uBufs;
     std::vector<VkDeviceMemory> uBufMems;
     std::vector<void*> uBufDatas;
@@ -43,6 +49,7 @@ struct WaterGrid {
     void init(int swapImgCount);
     void genWaterGrid(int x, int y);
     void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
+    glm::dvec2 updateWOffset(glm::dvec2 word_offset_coord, double cos_lat);
 };
 
 #endif // WATER_H
