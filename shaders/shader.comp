@@ -2,7 +2,7 @@
 
 #include "../vars.h"
 
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x = localSize, local_size_y = localSize) in;
 // x:height y:grid-x z:grid-y
 layout(binding = 0, rgba32f) uniform image2D imgIn;
 layout(binding = 1, rgba32f) uniform image2D imgOut;
@@ -12,37 +12,57 @@ layout(std140, binding = 3) uniform UniformBufferObject {
     int stage;
 } ubo;
 
-shared vec4 imgCache[10][10];
+shared vec4 imgCache[localSize+4][localSize+4];
+const float depth = -1.0;
+const float dt = 0.005;
 
-void main() {
-    const float depth = -1.0;
-    const float dt = 0.005;
-    ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
-    ivec2 cxy = ivec2(lxy + ivec2(1));
-
-    imgCache[cxy.x][cxy.y] = imageLoad(imgIn, xy + ubo.wOffset);
-    if (lxy.x % 8 == 0) {
-        imgCache[0][cxy.y] = imageLoad(imgIn, ivec2(xy.x-1, xy.y) + ubo.wOffset);
-    }
-    if (lxy.x % 8 == 7) {
-        imgCache[9][cxy.y] = imageLoad(imgIn, ivec2(xy.x+1, xy.y) + ubo.wOffset);
-    }
-    if (lxy.y % 8 == 0) {
-        imgCache[cxy.x][0] = imageLoad(imgIn, ivec2(xy.x, xy.y-1) + ubo.wOffset);
-    }
-    if (lxy.y % 8 == 7) {
-        imgCache[cxy.x][9] = imageLoad(imgIn, ivec2(xy.x, xy.y+1) + ubo.wOffset);
-    }
-    vec4 p = imgCache[cxy.x][cxy.y];
+void updateHeight(ivec2 cxy, inout vec4 p) {
+    p = imgCache[cxy.x][cxy.y];
     vec4 pxn = imgCache[cxy.x+1][cxy.y];
     vec4 pyn = imgCache[cxy.x][cxy.y+1];
     p.x -= depth + p.w; pxn.x -= depth + pxn.w; pyn.x -= depth + pyn.w;
     p.x -= p.x * ((pxn.y - p.y + pyn.z - p.z)) * dt;
     p.x += depth + p.w;
     imgCache[cxy.x][cxy.y] = p;
-    pxn = imgCache[cxy.x-1][cxy.y];
-    pyn = imgCache[cxy.x][cxy.y-1];
+}
+
+void main() {
+    ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
+    ivec2 cxy = ivec2(lxy + ivec2(2));
+    vec4 p;
+
+    imgCache[cxy.x][cxy.y] = imageLoad(imgIn, xy + ubo.wOffset);
+    if (lxy.y < 2) {
+        imgCache[cxy.x][lxy.y] = imageLoad(imgIn, ivec2(xy.x, xy.y-2) + ubo.wOffset);
+    } else if (lxy.y < 4) {
+        imgCache[cxy.x][lxy.y+localSize] = imageLoad(imgIn, ivec2(xy.x, xy.y-2+localSize) + ubo.wOffset);
+    } else if (lxy.y < 6) {
+        imgCache[lxy.y-4][cxy.x] = imageLoad(imgIn, ivec2(xy.x-lxy.x-2+(lxy.y-4), xy.y-lxy.y+lxy.x) + ubo.wOffset);
+    } else if (lxy.y < 8) {
+        imgCache[lxy.y+localSize-4][cxy.x] = imageLoad(imgIn, ivec2(xy.x-lxy.x+(lxy.y-6)+localSize, xy.y-lxy.y+lxy.x) + ubo.wOffset);
+    }
+    if (lxy.x % (localSize-1) == 0 && lxy.y % (localSize-1) == 0) {
+        ivec2 loffset = ivec2(lxy.x == 0 ? -1 : 1, lxy.y == 0 ? -1 : 1);
+        imgCache[cxy.x + loffset.x][cxy.y + loffset.y] = imageLoad(imgIn, xy + loffset + ubo.wOffset);
+    }
+    memoryBarrierShared();
+    barrier();
+    const int secondLast = localSize + 2;
+    if (lxy.y == 0) {
+        updateHeight(ivec2(cxy.x, 1), p);
+    } else if (lxy.y == 1) {
+        updateHeight(ivec2(cxy.x, secondLast), p);
+    } else if (lxy.y == 2) {
+        updateHeight(ivec2(1, cxy.x), p);
+    } else if (lxy.y == 3) {
+        updateHeight(ivec2(secondLast, cxy.x), p);
+    }
+    updateHeight(cxy, p);
+    memoryBarrierShared();
+    barrier();
+    vec4 pxn = imgCache[cxy.x-1][cxy.y];
+    vec4 pyn = imgCache[cxy.x][cxy.y-1];
     imageStore(normalImg, xy, vec4((p.x - pxn.x) * 30, (p.x - pyn.x) * 30, 0, 0));
     p.x -= depth; pxn.x -= depth; pyn.x -= depth;
     p.y += 9.8 * ((pxn.x - p.x)) * dt;

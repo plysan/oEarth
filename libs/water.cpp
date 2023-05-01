@@ -175,5 +175,5 @@ void WaterGrid::recordCmd(VkCommandBuffer cmdBuf, int descSetNum) {
     static uint32_t dynOffset = 0;
     vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pip);
     vkCmdBindDescriptorSets(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipLayout, 0, 1, &descSets[descSetNum], 1, &dynOffset);
-    vkCmdDispatch(cmdBuf, res/8, res/8, 1);
+    vkCmdDispatch(cmdBuf, res/localSize, res/localSize, 1);
 }

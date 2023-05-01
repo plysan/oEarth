@@ -21,5 +21,6 @@ const float waveDomainSize = 0.00001f;
 const int compDomainsPerDegree = 1000;
 const float pi = 3.141592653589793;
 const float pi2 = 2 * pi;
+const int localSize = 16;
 
 #endif // VARS_H
