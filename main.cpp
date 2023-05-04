@@ -26,7 +26,7 @@
 #include "libs/common.h"
 #include "libs/camera.h"
 #include "libs/water.h"
-#include "libs/tetrahedral_globe.h"
+#include "libs/globe.h"
 #include "libs/sky_dome.h"
 #include "vars.h"
 
@@ -159,7 +159,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> renderDescSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(42.226f, 3.147f, 0.00001f);
+    glm::vec3 initPos = coord2Pos(42.24f, 3.147f, 0.0002f);
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f),
@@ -209,14 +209,14 @@ private:
         createSampler(terrainSampler);
         createSampler(scatterSampler);
         createUniformBuffers();
-        water_grid.createImgs(computeQueue, commandPool);
+        water_grid.createImgs(computeQueue, commandPool, camera.pos);
         uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
         createDescriptorPool(descriptorPool, descSetCount, {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 4/*terrain + scatter + comp + compNormal*/}});
         createDescriptorSets(descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
                 uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
-        water_grid.init(swapChainImages.size());
+        water_grid.init();
         createCommandBuffers();
         createSyncObjects();
         std::thread t1(&VKDemo::updateStagingBufferStruct, this);

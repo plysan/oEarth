@@ -50,6 +50,10 @@ void createInitialImage(int width, int height, int depth, VkFormat format, void 
             pixSize = 4;
             usage |= VK_IMAGE_USAGE_STORAGE_BIT;
             break;
+        case VK_FORMAT_R32_SFLOAT:
+            pixSize = 4;
+            usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            break;
         defaut:
             throw std::runtime_error("unsupported VkFormat.");
     }

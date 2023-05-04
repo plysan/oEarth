@@ -6,45 +6,139 @@ layout(local_size_x = localSize, local_size_y = localSize) in;
 // x:height y:grid-x z:grid-y
 layout(binding = 0, rgba32f) uniform image2D imgIn;
 layout(binding = 1, rgba32f) uniform image2D imgOut;
-layout(binding = 2, rg16f) uniform image2D normalImg;
-layout(std140, binding = 3) uniform UniformBufferObject {
+layout(binding = 2, rg16f) uniform image2D normal;
+layout(binding = 3) uniform sampler2D bathymetry;
+layout(std140, binding = 4) uniform UniformBufferObject {
     ivec2 wOffset;
+    vec2 bathyCoord;
     int stage;
 } ubo;
 
 shared vec4 imgCache[localSize+4][localSize+4];
+shared float bathyCache[localSize+4][localSize+4];
+const float g = 9.81;
 const float depth = -1.0;
-const float dt = 0.005;
+const float dt = 0.03;
+const float dx = 1.0;
+const float bathyCoordSpanDel = 1.0 / waterRes / compsPerBathySide;
+const float sqrtG = sqrt(g);
 
 void updateHeight(ivec2 cxy, inout vec4 p) {
     p = imgCache[cxy.x][cxy.y];
+    float pBathy = bathyCache[cxy.x][cxy.y];
     vec4 pxn = imgCache[cxy.x+1][cxy.y];
     vec4 pyn = imgCache[cxy.x][cxy.y+1];
-    p.x -= depth + p.w; pxn.x -= depth + pxn.w; pyn.x -= depth + pyn.w;
+    float pxnBathy = bathyCache[cxy.x+1][cxy.y];
+    float pynBathy = bathyCache[cxy.x][cxy.y+1];
+    p.x -= depth + pBathy; pxn.x -= depth + pxnBathy; pyn.x -= depth + pynBathy;
     p.x -= p.x * ((pxn.y - p.y + pyn.z - p.z)) * dt;
-    p.x += depth + p.w;
+    if (p.x <= 0) {
+        p = imgCache[cxy.x][cxy.y] = vec4(0);
+    }
+    p.x += depth + pBathy;
     imgCache[cxy.x][cxy.y] = p;
 }
 
 void main() {
+    if (ubo.stage == 1) {
+        //TODO standalone shader
+        ivec2 coordOuter, coordInner;
+        uint wgIdx = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        switch (wgIdx) {
+            case 0: // left
+                if (ubo.wOffset.x != 0) return;
+                coordOuter = ivec2(0, gl_LocalInvocationIndex);
+                coordInner = ivec2(1, gl_LocalInvocationIndex);
+                break;
+            case 1: // right
+                if (ubo.wOffset.x != 0) return;
+                coordOuter = ivec2(waterRes - 1, gl_LocalInvocationIndex);
+                coordInner = ivec2(waterRes - 2, gl_LocalInvocationIndex);
+                break;
+            case 2: // top
+                if (ubo.wOffset.y != 0) return;
+                coordOuter = ivec2(gl_LocalInvocationIndex, waterRes - 1);
+                coordInner = ivec2(gl_LocalInvocationIndex, waterRes - 2);
+                break;
+            case 3: // down
+                if (ubo.wOffset.y != 0) return;
+                coordOuter = ivec2(gl_LocalInvocationIndex, 0);
+                coordInner = ivec2(gl_LocalInvocationIndex, 1);
+                break;
+        }
+        vec4 outer = imageLoad(imgOut, coordOuter);
+        vec4 inner = imageLoad(imgOut, coordInner);
+        vec4 outerOld = imageLoad(imgIn, coordOuter);
+        vec4 innerOld = imageLoad(imgIn, coordInner);
+        float bathyInner = texture(bathymetry, ubo.bathyCoord + coordInner * bathyCoordSpanDel).r;
+        float hOuter = outer.w - depth;
+        float hInner = inner.x - depth;
+        float hOuterOld = outerOld.w - depth;
+        float dtC1 = dt * sqrtG * sqrt(max(0, hInner - bathyInner));
+        float hOuterNew = (hOuterOld + dtC1 * hInner) / (1 + dtC1);
+        outer.w = hOuterNew + depth;
+        float vxMidDel = g * dt * (hInner - hOuter);
+        float vxMidNew;
+        switch (wgIdx) {
+            case 0:
+                vxMidNew = innerOld.y - vxMidDel;
+                inner.y = vxMidNew;
+                outer.y = outer.z = inner.z = 0;
+                outer.x = hOuterNew / (1 - vxMidNew * dt) + depth;
+                break;
+            case 1:
+                vxMidNew = outerOld.y + vxMidDel;
+                outer.y = vxMidNew;
+                outer.z = inner.z = 0;
+                outer.x = hOuterNew / (1 + vxMidNew * dt) + depth;
+                break;
+            case 2:
+                vxMidNew = outerOld.z + vxMidDel;
+                outer.z = vxMidNew;
+                outer.y = inner.y = 0;
+                outer.x = hOuterNew / (1 + vxMidNew * dt) + depth;
+                break;
+            case 3:
+                vxMidNew = innerOld.z - vxMidDel;
+                inner.z = vxMidNew;
+                outer.z = outer.y = inner.y = 0;
+                outer.x = hOuterNew / (1 - vxMidNew * dt) + depth;
+                break;
+        }
+        imageStore(imgOut, coordOuter, outer);
+        imageStore(imgOut, coordInner, inner);
+        return;
+    }
+
     ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
     ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
     ivec2 cxy = ivec2(lxy + ivec2(2));
     vec4 p;
 
     imgCache[cxy.x][cxy.y] = imageLoad(imgIn, xy + ubo.wOffset);
-    if (lxy.y < 2) {
-        imgCache[cxy.x][lxy.y] = imageLoad(imgIn, ivec2(xy.x, xy.y-2) + ubo.wOffset);
-    } else if (lxy.y < 4) {
-        imgCache[cxy.x][lxy.y+localSize] = imageLoad(imgIn, ivec2(xy.x, xy.y-2+localSize) + ubo.wOffset);
-    } else if (lxy.y < 6) {
-        imgCache[lxy.y-4][cxy.x] = imageLoad(imgIn, ivec2(xy.x-lxy.x-2+(lxy.y-4), xy.y-lxy.y+lxy.x) + ubo.wOffset);
-    } else if (lxy.y < 8) {
-        imgCache[lxy.y+localSize-4][cxy.x] = imageLoad(imgIn, ivec2(xy.x-lxy.x+(lxy.y-6)+localSize, xy.y-lxy.y+lxy.x) + ubo.wOffset);
+    bathyCache[cxy.x][cxy.y] = texture(bathymetry, ubo.bathyCoord + xy * bathyCoordSpanDel).r;
+    if (lxy.y < 8) {
+        ivec2 srcCoord, dstCoord;
+        if (lxy.y < 2) {
+            srcCoord = ivec2(xy.x, xy.y-2);
+            dstCoord = ivec2(cxy.x, lxy.y);
+        } else if (lxy.y < 4) {
+            srcCoord = ivec2(xy.x, xy.y-2+localSize);
+            dstCoord = ivec2(cxy.x, lxy.y+localSize);
+        } else if (lxy.y < 6) {
+            srcCoord = ivec2(xy.x-lxy.x-2+(lxy.y-4), xy.y-lxy.y+lxy.x);
+            dstCoord = ivec2(lxy.y-4, cxy.x);
+        } else {
+            srcCoord = ivec2(xy.x-lxy.x+(lxy.y-6)+localSize, xy.y-lxy.y+lxy.x);
+            dstCoord = ivec2(lxy.y+localSize-4, cxy.x);
+        }
+        imgCache[dstCoord.x][dstCoord.y] = imageLoad(imgIn, srcCoord + ubo.wOffset);
+        bathyCache[dstCoord.x][dstCoord.y] = texture(bathymetry, ubo.bathyCoord + srcCoord * bathyCoordSpanDel).r;
     }
     if (lxy.x % (localSize-1) == 0 && lxy.y % (localSize-1) == 0) {
         ivec2 loffset = ivec2(lxy.x == 0 ? -1 : 1, lxy.y == 0 ? -1 : 1);
         imgCache[cxy.x + loffset.x][cxy.y + loffset.y] = imageLoad(imgIn, xy + loffset + ubo.wOffset);
+        bathyCache[cxy.x + loffset.x][cxy.y + loffset.y] = texture(bathymetry, ubo.bathyCoord + (xy + loffset) * bathyCoordSpanDel).r;
     }
     memoryBarrierShared();
     barrier();
@@ -63,10 +157,11 @@ void main() {
     barrier();
     vec4 pxn = imgCache[cxy.x-1][cxy.y];
     vec4 pyn = imgCache[cxy.x][cxy.y-1];
-    imageStore(normalImg, xy, vec4((p.x - pxn.x) * 30, (p.x - pyn.x) * 30, 0, 0));
+    imageStore(normal, xy, vec4((p.x - pxn.x) * 30, (p.x - pyn.x) * 30, 0, 0));
     p.x -= depth; pxn.x -= depth; pyn.x -= depth;
-    p.y += 9.8 * ((pxn.x - p.x)) * dt;
-    p.z += 9.8 * ((pyn.x - p.x)) * dt;
+    float damp = 1.1 - bathyCache[cxy.x][cxy.y];
+    p.y = clamp(p.y + g * (pxn.x - p.x) * dt, -damp, damp);
+    p.z = clamp(p.z + g * (pyn.x - p.x) * dt, -damp, damp);
     p.x += depth;
     imageStore(imgOut, xy, p);
 }

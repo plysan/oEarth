@@ -37,5 +37,7 @@ public:
     void genGlobe(glm::dvec3 camPos);
 };
 
+void fillBathymetry(glm::vec2 dstBl, glm::vec2 dstTr, std::vector<float> &dstData, int dstDataSize);
+
 #endif // TETRAHEDRAL_GLOBE_H
 

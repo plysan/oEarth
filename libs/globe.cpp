@@ -7,12 +7,13 @@
 #include <sys/stat.h>
 #include <tiffio.h>
 #include <glm/glm.hpp>
+#include <glm/gtx/common.hpp>
 #include <glm/gtx/vector_angle.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtx/string_cast.hpp>
 
 #include "../utils/coord.h"
-#include "tetrahedral_globe.h"
+#include "globe.h"
 #include "common.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "../extlibs/stb_image.h"
@@ -45,7 +46,7 @@ void loadDem(std::string &fname, ImageSource &source) {
     source.comp /= 8;
     tmsize_t strip_size = TIFFStripSize(tif);
     uint32_t strips = TIFFNumberOfStrips(tif);
-    std::cout << "DEM dimension: (" << std::dec << source.w << " X " << source.h << ") strip: " << strip_size << " * " << strips << '\n';
+    std::cout << "DEM:" << fname << ", dimension: (" << std::dec << source.w << " X " << source.h << ") strip: " << strip_size << " * " << strips << '\n';
     char* data = (char*)_TIFFmalloc(source.w * source.h * source.comp);
     for (int strip=0; strip<strips; strip++) {
         TIFFReadEncodedStrip(tif, strip, data+strip*strip_size, (tsize_t) -1);
@@ -72,9 +73,9 @@ inline bool ends_with(std::string const &value, std::string const &ending)
     return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
 }
 
-ImageSource* getImgSource(std::string &key, bool *exist) {
+ImageSource* getImgSource(std::string &key, bool *cached) {
     if (image_cache.find(key) == image_cache.end()) {
-        if (exist != NULL) *exist = false;
+        if (cached != NULL) *cached = false;
         ImageSource *source = new ImageSource();
         if (ends_with(key, IMG_TIF)) {
             loadDem(key, *source);
@@ -83,12 +84,12 @@ ImageSource* getImgSource(std::string &key, bool *exist) {
             source->data = (char*)stbi_load(key.c_str(), &source->w, &source->h, &comp, STBI_rgb_alpha);
         }
         if (source->data == NULL) {
-            throw std::runtime_error("error reading image source");
+            throw std::runtime_error("error reading image source: " + key + ".");
         }
         image_cache[key] = source;
         return source;
     }
-    if (exist != NULL) *exist = true;
+    if (cached != NULL) *cached = true;
     return image_cache.find(key)->second;
 }
 
@@ -130,12 +131,12 @@ void fillSubTex(TriNode &node) {
     }
 }
 
-bool testImageSource(int level, double lat, double lng, std::string &file_name, const std::string &img_type) {
+bool testImageSource(int level, double latT, double lngL, std::string &file_name, const std::string &img_type) {
     struct stat buf;
     std::stringstream file_name_s;
-    file_name_s << "textures/" << std::setprecision(16) << level << '_' << lat << '_' << lng << img_type;
+    file_name_s << "textures/" << std::setprecision(16) << level << '_' << latT << '_' << lngL << img_type;
+    file_name = file_name_s.str();
     if (stat(file_name_s.str().c_str(), &buf) == 0) {
-        file_name = file_name_s.str();
         return true;
     }
     return false;
@@ -178,20 +179,20 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
     float dem_span_lng = span_node ? abs(node_span_lng / 2) : abs(node_span_lng);
 
     std::string dem_source_key_0, dem_source_key_1;
-    bool file_exists, exist;
+    bool file_exists, cached;
     file_exists = testImageSource(node.level, node_start_lat, node_start_lng, dem_source_key_0, IMG_TIF);
     if (span_node) {
         file_exists &= testImageSource(node.level, node_start_lat, node_start_lng + dem_span_lng, dem_source_key_1, IMG_TIF);
     }
     if(file_exists) {
-        node.dem_source_0 = getImgSource(dem_source_key_0, &exist);
-        if (!exist) {
+        node.dem_source_0 = getImgSource(dem_source_key_0, &cached);
+        if (!cached) {
             node.dem_source_0->tl_coord = glm::vec2(node_start_lat, node_start_lng);
             node.dem_source_0->span = glm::vec2(dem_span_lat, dem_span_lng);
         }
         if (span_node) {
-            node.dem_source_1 = getImgSource(dem_source_key_1, &exist);
-            if (!exist) {
+            node.dem_source_1 = getImgSource(dem_source_key_1, &cached);
+            if (!cached) {
                 node.dem_source_1->tl_coord = glm::vec2(node_start_lat, node_start_lng + dem_span_lng);
                 node.dem_source_1->span = glm::vec2(dem_span_lat, dem_span_lng);
             }
@@ -461,4 +462,68 @@ void TetrahedraGlobe::genGlobe(glm::dvec3 camPos) {
         collect(node);
     }
     std::cout << "Execution time: " << (double)(clock() - begin)/CLOCKS_PER_SEC << "s, vertices: " << vertices.size() << '\n';
+}
+
+void fillBathymetry(glm::vec2 levelBl, int level, glm::vec2 dstBl, glm::vec2 dstTr, glm::vec2 dstUvBl, glm::vec2 dstUvTr, std::vector<float> &dstData, int dstDataSize) {
+    std::string srcDataStr;
+    glm::vec2 srcLevelBl = levelBl;
+    int srcLevel = level;
+    float levelSize;
+    while(srcLevel > 0 && !testImageSource(srcLevel, srcLevelBl.x + levelSize, srcLevelBl.y, srcDataStr, IMG_TIF)) {
+        srcLevel--;
+        levelSize = 90.0 / glm::pow(2, srcLevel - 1);
+        srcLevelBl = srcLevelBl - glm::fmod(srcLevelBl, levelSize);
+    }
+    if (srcLevel == 0) {
+        std::cout << "canot find bathy" <<'\n';
+        return;
+    }
+    ImageSource *srcImg = getImgSource(srcDataStr, NULL);
+    float *srcData = (float*)srcImg->data;
+    glm::vec2 srcDataIdxSize = glm::vec2(srcImg->h - 1, srcImg->w - 1);
+    glm::vec2 dstCoordSize = dstTr - dstBl;
+    glm::ivec2 dataIdxBl = (glm::ivec2)((dstUvBl - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
+    glm::ivec2 dataIdxTr = (glm::ivec2)((dstUvTr - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
+    glm::ivec2 srcIdx = (glm::ivec2)((dstUvBl - srcLevelBl) / levelSize * srcDataIdxSize);
+    glm::vec2 srcIdxDel = (glm::dvec2)dstCoordSize / (dstDataSize - 1.0) / ((double)levelSize / (glm::dvec2)srcDataIdxSize);
+    glm::vec2 srcIdxCur = srcIdx;
+    for (int v = dataIdxBl.x; v <= dataIdxTr.x; v++) {
+        for (int u = dataIdxBl.y; u <= dataIdxTr.y; u++) {
+            float srcVal = srcData[(int)(srcDataIdxSize.x - srcIdxCur.x) * srcImg->w + (int)srcIdxCur.y];
+            dstData[v * dstDataSize + u] = glm::clamp(srcVal + 50, 0.0f, 50.0f) / 50;
+            srcIdxCur.y += srcIdxDel.y;
+        }
+        srcIdxCur.x += srcIdxDel.x;
+        srcIdxCur.y = srcIdx.y;
+    }
+}
+
+void fillBathymetry(glm::vec2 dstBl, glm::vec2 dstTr, std::vector<float> &dstData, int dstDataSize) {
+    glm::vec2 dstBlAbs = dstBl + glm::vec2(90.0f, 180.0f);
+    int level = glm::ceil(glm::log2(90.0 / (dstTr.y - dstBl.y)) + 1);
+    float levelSize = 90.0 / glm::pow(2, level - 1);
+    glm::vec2 levelBl = dstBlAbs - glm::fmod(dstBlAbs, levelSize) - glm::vec2(90.0f, 180.0f);
+    glm::vec2 levelTr = levelBl + glm::vec2(levelSize);
+    fillBathymetry(levelBl, level, dstBl, dstTr, dstBl, levelTr, dstData, dstDataSize);
+    bool spanLat = levelTr.x < dstTr.x;
+    bool spanLng = levelTr.y < dstTr.y;
+    if (spanLat) {
+        fillBathymetry(glm::vec2(levelBl.x + levelSize, levelBl.y), level, dstBl, dstTr, glm::vec2(levelTr.x, dstBl.y), glm::vec2(dstTr.x, levelTr.y), dstData, dstDataSize);
+    }
+    if (spanLng) {
+        fillBathymetry(glm::vec2(levelBl.x, levelBl.y + levelSize), level, dstBl, dstTr, glm::vec2(dstBl.x, levelTr.y), glm::vec2(levelTr.x, dstTr.y), dstData, dstDataSize);
+    }
+    if (spanLat && spanLng) {
+        fillBathymetry(levelTr, level, dstBl, dstTr, levelTr, dstTr, dstData, dstDataSize);
+    }
+    if (debug_dem) {
+        printf("Bathymetry:\n");
+        for (int j = dstDataSize-1; j >= 0; j-=80) {
+            for (int k = 0; k < dstDataSize; k+=30) {
+                float h = dstData[dstDataSize * j + k];
+                std::cout << (h == 1 ? '*' : h == 0 ? '_' : '.');
+            }
+            printf("\n");
+        }
+    }
 }
