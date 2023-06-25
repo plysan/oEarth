@@ -12,6 +12,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtx/string_cast.hpp>
 
+#include "../vars.h"
 #include "../utils/coord.h"
 #include "globe.h"
 #include "common.h"
@@ -490,7 +491,7 @@ void fillBathymetry(glm::vec2 levelBl, int level, glm::vec2 dstBl, glm::vec2 dst
     for (int v = dataIdxBl.x; v <= dataIdxTr.x; v++) {
         for (int u = dataIdxBl.y; u <= dataIdxTr.y; u++) {
             float srcVal = srcData[(int)(srcDataIdxSize.x - srcIdxCur.x) * srcImg->w + (int)srcIdxCur.y];
-            dstData[v * dstDataSize + u] = glm::clamp(srcVal + 50, 0.0f, 50.0f) / 50;
+            dstData[v * dstDataSize + u] = glm::clamp(srcVal + waterDeepM, 0.0f, waterDeepM);
             srcIdxCur.y += srcIdxDel.y;
         }
         srcIdxCur.x += srcIdxDel.x;

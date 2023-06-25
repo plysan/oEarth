@@ -25,7 +25,7 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 v_inv;
     vec3 word_offset;
     int target;
-    vec2 word_offset_coord;
+    vec2 freqCoord;
     vec2 terrainOffset;
     float height;
     float time;
@@ -37,9 +37,16 @@ vec3 water_refrac = vec3(0.25, 0.7, 1);
 vec3 sun_color = vec3(1) * 4;
 float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
+float dispersions[1][3] = {
+    // h, wx, wy
+    {1.0, 0.1, 0.1},
+};
 
 vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
     vec4 compH = texture(compNorImg, waterOffsetCoord);
+    vec2 procH = vec2(0.0);
+    for (int i = 0; i < dispersions.length(); i++) {
+    }
     vec3 surface_n_cs = normalize(world_offset_n_cs
             + (compH.x - cos((fragTexCoord.x + delta.x) / wave_h_domain + ubo.time) * h_coe) * lat_n_cs
             + (compH.y - cos((fragTexCoord.y + delta.y) / wave_h_domain + ubo.time) * h_coe) * lng_n_cs);

@@ -27,8 +27,9 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 v_inv;
     vec3 word_offset; // from earth center
     int target;
-    vec2 word_offset_coord;
+    vec2 freqCoord;
     vec2 waterOffset;
+    float waterRadius;
     float height;
     float time;
 } ubo;
@@ -43,6 +44,7 @@ vec3 sun_ws = vec3(20000.0, 0.0, 0.0);
 float dPixZenith = 0.0010908305661643995; // sin(yFov/yRes)
 float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
+const float meterToRad = 1.0 / earthRadiusM;
 
 void handle_water(inout vec3 vertex_pos_cs) {
     vec3 cam_vertex_dir = normalize((ubo.v_inv * vec4((ubo.p_inv * vec4(inPosition, 1)).xyz, 0)).xyz);
@@ -89,13 +91,13 @@ void handle_water(inout vec3 vertex_pos_cs) {
     if (cam_vertex_length / wave_size_v > 200) {
         wave_size_v *= 1 - smoothstep(200, 300, cam_vertex_length / wave_v0) / 100;
     }
-    float lat_param = ubo.word_offset_coord.x + lat_dist * worldToFreqCoe;
-    float lng_param = ubo.word_offset_coord.y + lng_dist * worldToFreqCoe;
+    float lat_param = ubo.freqCoord.x + lat_dist * worldToFreqCoe;
+    float lng_param = ubo.freqCoord.y + lng_dist * worldToFreqCoe;
     fragTexCoord = vec2(lng_param, lat_param);
 
-    waterOffsetCoord = vec2(lng_dist, lat_dist) / pi * 180 * compDomainsPerDegree + ubo.waterOffset + vec2(0.5);
+    waterOffsetCoord = vec2(lng_dist, lat_dist) / ubo.waterRadius / 2 + ubo.waterOffset + vec2(0.5);
     float compH = texture(compImg, waterOffsetCoord).x;
-    float water_height = compH * 0.00008 + (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
+    float water_height = compH * meterToRad + (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
 
     gl_Position = ubo.proj * vec4(((ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
 }

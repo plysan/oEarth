@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := compile
 
 CC = g++
-CXXFLAGS = -std=c++17 -g
+CXXFLAGS = -std=c++17
 LDFLAGS = -lglfw -ltiff -lvulkan -ldl -lpthread
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
@@ -19,7 +19,7 @@ DIR_EXT_LIBS := extlibs
 DIR_TEXTURES := textures
 
 %.spv: % vars.h
-	glslc $< -o $@
+	glslc --target-env=vulkan1.2 $< -o $@
 
 $(DIR_EXT_LIBS)/stb_image.h:
 	wget https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -P $(DIR_EXT_LIBS)
@@ -47,7 +47,10 @@ endif
 
 compile: compile_main index $(SPV)
 
-test: compile $(DIR_TEXTURES)/texture.jpg
+test: CXXFLAGS += -DDEBUG -g
+test: run
+
+run: compile $(DIR_TEXTURES)/texture.jpg
 	./main
 
 clean:
@@ -61,4 +64,4 @@ cscope.out: $(SRC) $(DEP)
 tags: $(SRC) $(DEP)
 	ctags -R
 
-.PHONY: compile compile_main test clean index
+.PHONY: test run compile compile_main clean index

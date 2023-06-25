@@ -39,8 +39,9 @@ struct FrameParam {
     glm::mat4 v_inv;
     glm::vec3 wordOffset;
     int target;
-    glm::vec2 word_offset_coord;
+    glm::vec2 freqCoord;
     glm::vec2 waterOffset;
+    float waterRadius;
     float height;
     float time;
     union {
@@ -50,7 +51,6 @@ struct FrameParam {
     };
     glm::mat4 pad1;
     glm::mat4 pad2;
-    float pad3;
 };
 
 struct StagingBufferStruct {
@@ -78,13 +78,16 @@ class VKDemo {
 
     const std::vector<const char*> requiredPhyDevExt = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+#ifdef DEBUG
+        VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
+#endif
         //"VK_KHR_portability_subset",
     };
 
-#ifdef NDEBUG
-    const bool enableValidationLayers = false;
-#else
+#ifdef DEBUG
     const bool enableValidationLayers = true;
+#else
+    const bool enableValidationLayers = false;
 #endif
 
     const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -159,7 +162,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> renderDescSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(42.24f, 3.147f, 0.0002f);
+    glm::vec3 initPos = coord2Pos(42.24f, 3.147f, 0.00004f);
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f),
@@ -509,6 +512,7 @@ private:
     }
 
     void drawFrame() {
+        //std::this_thread::sleep_for (std::chrono::milliseconds(100));
         static double maxCost = 0.0;
         clock_t stamp1 = clock();
         if (!inUpdate) {
@@ -648,13 +652,17 @@ private:
         fParams[2].water_param.firstIndex = sbs.skyIdxMax;
         fParams[2].water_param.vertexOffset = sbs.terrainVertMax + sbs.skyVertMax;
         fParams[2].water_param.firstInstance = 0;
-        glm::dvec2 word_offset_coord = dPos2DCoord(camera.pos);
+        glm::dvec2 worldCoord = dPos2DCoord(camera.pos);
         static double pi2 = glm::pi<double>() * 2;
-        double cos_lat = glm::cos(word_offset_coord.x);
-        fParams[2].waterOffset = water_grid.updateWOffset(word_offset_coord, cos_lat);
+        double cos_lat = glm::cos(worldCoord.x);
+
+        double ele = glm::max(0.0, glm::length(camera.pos) - 1.0);
+        static double spanTan = glm::tan(75.0 / 180.0 * glm::pi<double>());
+        double waterRadius = glm::max(0.0002, ele * spanTan);
         static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);
-        word_offset_coord = glm::fmod(word_offset_coord / waveRectSize * pi2, pi2);
-        fParams[2].word_offset_coord = word_offset_coord;
+        fParams[2].freqCoord = glm::fmod(worldCoord / waveRectSize * pi2, pi2);
+        fParams[2].waterOffset = water_grid.updateWOffset(worldCoord, waterRadius, cos_lat);
+        fParams[2].waterRadius = waterRadius;
         memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 3);
     }
 

@@ -9,14 +9,20 @@
 #include "../vars.h"
 
 struct WaterParam {
-    glm::ivec2 wOffset;
-    glm::vec2 bathyCoord;
+    glm::ivec2 iOffset;
+    glm::vec2 bathyUvBl;
+    glm::vec2 freqCoordBl;
+    glm::vec2 freqCoordTr;
+    glm::vec2 freqCoordDel;
+    float bathyUvDel;
     int stage;
-    glm::mat3 d0;
+    float time;
+    float scale;
+    float dt;
+    float dx;
     glm::mat4 d1;
     glm::mat4 d2;
     glm::mat4 d3;
-    glm::vec2 v0;
 };
 
 struct WaterGrid {
@@ -42,7 +48,6 @@ struct WaterGrid {
     VkImageView bathymetryImgView;
     VkSampler bathymetrySampler;
     int bathyRes = 2048;
-    long gridsPerDegree = waterRes * (long)compDomainsPerDegree;
     std::vector<WaterParam> waterParam;
     VkBuffer uBuf = NULL;
     VkDeviceMemory uBufMem = NULL;
@@ -53,10 +58,7 @@ struct WaterGrid {
     void init();
     void genWaterGrid(int x, int y);
     void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
-    glm::dvec2 updateWOffset(glm::dvec2 word_offset_coord, double cos_lat);
-
-    glm::ivec2 bathyICoord;
-    glm::ivec2 bathyCoord;
+    glm::dvec2 updateWOffset(glm::dvec2 worldCoord, double &waterRadius, double cos_lat);
 };
 
 #endif // WATER_H
