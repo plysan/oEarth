@@ -42,6 +42,10 @@ void createInitialImage(int width, int height, int depth, VkFormat format, void 
             pixSize = 8;
             usage |= VK_IMAGE_USAGE_STORAGE_BIT;
             break;
+        case VK_FORMAT_R32G32B32_SFLOAT:
+            pixSize = 12;
+            usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            break;
         case VK_FORMAT_R32G32B32A32_SFLOAT:
             pixSize = 16;
             usage |= VK_IMAGE_USAGE_STORAGE_BIT;
@@ -1105,15 +1109,19 @@ void createDescriptorSets(VkDescriptorPool descriptorPool, uint32_t descSetCount
                 imageInfoWrite.pImageInfo = &imageInfos.at(j);
                 descriptorWrites.push_back(imageInfoWrite);
             }
-            VkDescriptorImageInfo compImageInfo{waterGrid.compImgSamplers[waterGrid.compImgCount-1], waterGrid.compImgViews[waterGrid.compImgCount-1], VK_IMAGE_LAYOUT_GENERAL};
-            VkWriteDescriptorSet compImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, renderDescSets[descSetIdx],
-                static_cast<uint32_t>(imageViews.size() + 1), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compImageInfo, 0, 0};
+            VkDescriptorImageInfo compImageInfo{waterGrid.compImgSamplers[(k+1)%compSets], waterGrid.compImgViews[(k+1)%compSets], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet compImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, renderDescSets[descSetIdx],
+                static_cast<uint32_t>(imageViews.size() + 1), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compImageInfo, NULL, NULL};
             descriptorWrites.push_back(compImageWrite);
             VkDescriptorImageInfo compNorImageInfo{waterGrid.normalSampler, waterGrid.normalImgView, VK_IMAGE_LAYOUT_GENERAL};
-            VkWriteDescriptorSet compNorImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, renderDescSets[descSetIdx],
-                static_cast<uint32_t>(imageViews.size() + 2), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compNorImageInfo, 0, 0};
+            VkWriteDescriptorSet compNorImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, renderDescSets[descSetIdx],
+                static_cast<uint32_t>(imageViews.size() + 2), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compNorImageInfo, NULL, NULL};
             descriptorWrites.push_back(compNorImageWrite);
-            vkUpdateDescriptorSets(logicalDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+            VkDescriptorImageInfo bathyImageInfo{waterGrid.bathymetrySampler, waterGrid.bathymetryImgView, VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet bathyImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, renderDescSets[descSetIdx],
+                static_cast<uint32_t>(imageViews.size() + 3), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bathyImageInfo, NULL, NULL};
+            descriptorWrites.push_back(bathyImageWrite);
+            vkUpdateDescriptorSets(logicalDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, NULL);
         }
     }
 }

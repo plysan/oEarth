@@ -52,13 +52,14 @@ struct WaterGrid {
     VkBuffer uBuf = NULL;
     VkDeviceMemory uBufMem = NULL;
     void* uBufData = NULL;
+    glm::dvec2 bathyRadius;
 
     std::vector<Vertex> vertices;
     std::vector<int> indices;
     void init();
     void genWaterGrid(int x, int y);
     void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
-    glm::dvec2 updateWOffset(glm::dvec2 worldCoord, double &waterRadius, double cos_lat);
+    glm::dvec2 updateWOffset(glm::dvec2 worldCoord, double &waterRadius, glm::vec2 &bathyUvMid, double cos_lat, int count);
 };
 
 #endif // WATER_H

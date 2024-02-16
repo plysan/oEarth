@@ -41,6 +41,8 @@ struct FrameParam {
     int target;
     glm::vec2 freqCoord;
     glm::vec2 waterOffset;
+    glm::vec2 bathyUvMid;
+    glm::vec2 bathyRadius;
     float waterRadius;
     float height;
     float time;
@@ -50,7 +52,8 @@ struct FrameParam {
         VkDrawIndexedIndirectCommand water_param;
     };
     glm::mat4 pad1;
-    glm::mat4 pad2;
+    glm::mat3 pad2;
+    glm::vec3 pad3;
 };
 
 struct StagingBufferStruct {
@@ -162,7 +165,7 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> renderDescSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(42.24f, 3.147f, 0.00004f);
+    glm::vec3 initPos = coord2Pos(42.24f, 3.131f, 0.00001f);
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f),
@@ -198,8 +201,8 @@ private:
         createRenderPass(renderPass, swapChainImageFormat);
         createDescriptorSetLayout(gDescSetLayout,
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL});
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_VERTEX_BIT});
         createGraphicsPipeline(gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent, sizeof(Vertex),
                 {offsetof(Vertex, pos), offsetof(Vertex, normal), offsetof(Vertex, texCoord)},
                 {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT});
@@ -216,7 +219,7 @@ private:
         uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
         createDescriptorPool(descriptorPool, descSetCount, {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 4/*terrain + scatter + comp + compNormal*/}});
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 5/*terrain + scatter + comp + compNormal + bathy*/}});
         createDescriptorSets(descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
                 uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
         water_grid.init();
@@ -252,7 +255,7 @@ private:
         uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
         createDescriptorPool(descriptorPool, descSetCount, {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
-                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 4/*terrain + scatter + comp + compNormal*/}});
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descSetCount * 5/*terrain + scatter + comp + compNormal + bathy*/}});
         createDescriptorSets(descriptorPool, descSetCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
                 uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
         createCommandBuffers();
@@ -470,6 +473,8 @@ private:
                 if (vkBeginCommandBuffer(commandBuffers[cmdBufIdx], &beginInfo) != VK_SUCCESS) {
                     throw std::runtime_error("failed to begin recording command buffer!");
                 }
+                // compute
+                water_grid.recordCmd(commandBuffers[cmdBufIdx], j);
                 // render
                 VkRenderPassBeginInfo renderPassInfo{};
                 renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -502,8 +507,6 @@ private:
                 VkDeviceSize water_offset = dynamicOffset + offsetof(struct FrameParam, water_param);
                 vkCmdDrawIndexedIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], water_offset, 1, 0);
                 vkCmdEndRenderPass(commandBuffers[cmdBufIdx]);
-                // compute
-                water_grid.recordCmd(commandBuffers[cmdBufIdx], j);
                 if (vkEndCommandBuffer(commandBuffers[cmdBufIdx]) != VK_SUCCESS) {
                     throw std::runtime_error("failed to record command buffer!");
                 }
@@ -539,7 +542,9 @@ private:
             fParams[2].wordOffset = globe.camOffset;
             inUpdate = true;
         }
-        vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+        static VkFence lastFence = inFlightFences[currentFrame];
+        vkWaitForFences(logicalDevice, 1, &lastFence, VK_TRUE, UINT64_MAX);
+        lastFence = inFlightFences[currentFrame];
         uint32_t imageIndex;
         VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -550,7 +555,7 @@ private:
         }
         // Check if a previous frame is using this image (i.e. there is its fence to wait on)
         if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-            //vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+            vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
         }
         // Mark the image as now being in use by this frame
         imagesInFlight[imageIndex] = inFlightFences[currentFrame];
@@ -646,7 +651,8 @@ private:
         fParams[2].view = fParams[0].view;
         fParams[2].proj = camera.proj;
         camera.getPVInv(fParams[2].height, fParams[2].p_inv, fParams[2].v_inv, fParams[0].wordOffset);
-        fParams[2].time = glfwGetTime();
+        static int count = 0;
+        fParams[2].time = dt * count;
         fParams[2].water_param.indexCount = sbs.water_idx_size;
         fParams[2].water_param.instanceCount = 1;
         fParams[2].water_param.firstIndex = sbs.skyIdxMax;
@@ -661,8 +667,10 @@ private:
         double waterRadius = glm::max(0.0002, ele * spanTan);
         static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);
         fParams[2].freqCoord = glm::fmod(worldCoord / waveRectSize * pi2, pi2);
-        fParams[2].waterOffset = water_grid.updateWOffset(worldCoord, waterRadius, cos_lat);
+        fParams[2].freqCoord = glm::vec2(fParams[2].freqCoord.y, fParams[2].freqCoord.x);
+        fParams[2].waterOffset = water_grid.updateWOffset(worldCoord, waterRadius, fParams[2].bathyUvMid, cos_lat, count++);
         fParams[2].waterRadius = waterRadius;
+        fParams[2].bathyRadius = glm::vec2(water_grid.bathyRadius.x, water_grid.bathyRadius.x);
         memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 3);
     }
 

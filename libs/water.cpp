@@ -123,7 +123,6 @@ void WaterGrid::genWaterGrid(int x, int y) {
 }
 
 static glm::dvec2 bathyPos;
-static glm::dvec2 bathyRadius;
 
 void WaterGrid::createImgs(VkQueue queue, VkCommandPool commandPool, glm::dvec3 cameraPos) {
     compImgs.resize(compImgCount);
@@ -162,18 +161,17 @@ void WaterGrid::createImgs(VkQueue queue, VkCommandPool commandPool, glm::dvec3 
     double bathyRadiusLat = waterRadius * 4;
     bathyRadius = glm::dvec2(bathyRadiusLat, bathyRadiusLat / cos_lat);
     fillBathymetry(worldCoord - bathyRadius / glm::pi<double>() * 180.0, worldCoord + bathyRadius / glm::pi<double>() * 180.0, data, bathyRes);
-    createInitialImage(bathyRes, bathyRes, 1, VK_FORMAT_R32_SFLOAT, data.data(), bathymetryImg, bathymetryImgMem, queue, commandPool);
-    transitionImageLayout(bathymetryImg, VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, queue, commandPool, NULL, 0);
-    bathymetryImgView = createImageView(bathymetryImg, VK_FORMAT_R32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, 2);
+    createInitialImage(bathyRes, bathyRes, 1, VK_FORMAT_R32G32B32A32_SFLOAT, data.data(), bathymetryImg, bathymetryImgMem, queue, commandPool);
+    transitionImageLayout(bathymetryImg, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, queue, commandPool, NULL, 0);
+    bathymetryImgView = createImageView(bathymetryImg, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_ASPECT_COLOR_BIT, 2);
     createSampler(bathymetrySampler);
 }
 
-glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 worldCoord, double &waterRadius, double cos_lat) {
+glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 worldCoord, double &waterRadius, glm::vec2 &bathyUvMid, double cos_lat, int count) {
     static double waterRadiusOld = waterRadius / waterRes / 10;
     static double waterBathyPropo = waterRadius / bathyRadius.x;
     static double bathyUvBlOrig = 0.5 - 0.5 * waterBathyPropo, bathyUvDel = 1.0 / (waterRes-1) * waterBathyPropo;
     static glm::dvec2 waterDel = glm::dvec2(waterRadius * 2 / (waterRes-1), waterRadius * 2 / (waterRes-1) / cos_lat);
-    static double dt = 0.01;
     static double dx = waterDel.x * 6378000;
     double scale = waterRadius / waterRadiusOld;
     glm::dvec2 waterCoord, waterCoordFrac;
@@ -209,10 +207,10 @@ glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 worldCoord, double &waterRadius, 
     bathyUvBl -= bathyDeviate;
     bathyUvBl = glm::dvec2(bathyUvBl.y, bathyUvBl.x);
     waterParam[0].bathyUvBl = waterParam[1].bathyUvBl = bathyUvBl;
+    bathyUvMid = (0.5 - bathyDeviate);
+    bathyUvMid = glm::vec2(bathyUvMid.y, bathyUvMid.x);
     waterParam[0].bathyUvDel = waterParam[1].bathyUvDel = bathyUvDel;
-    static int count = 0;
     waterParam[0].time = waterParam[1].time = dt * count;
-    count++;
 
     waterParam[0].scale = waterParam[1].scale = scale;
     static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);

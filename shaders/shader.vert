@@ -1,5 +1,6 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_EXT_debug_printf : enable
 
 #include "../vars.h"
 #include "common.h"
@@ -18,6 +19,7 @@ layout(location = 7) out vec3 vertex_pos_n_cs;
 layout(location = 8) out float cam_vertex_length;
 layout(location = 9) out vec3 cam_param;
 layout(location = 10) out vec2 waterOffsetCoord;
+layout(location = 11) out float bathy;
 
 layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 model;
@@ -29,10 +31,14 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     int target;
     vec2 freqCoord;
     vec2 waterOffset;
+    vec2 bathyUvMid;
+    vec2 bathyRadius;
     float waterRadius;
     float height;
     float time;
 } ubo;
+
+layout(binding = 5) uniform sampler2D bathymetry;
 
 float atmosphere_radius_square = atmosphereTopRadius * atmosphereTopRadius;
 float scatter_height = (length((ubo.view * vec4(-ubo.word_offset, 1.0)).xyz) - earthRadius) / atmosphereThickness;
@@ -45,6 +51,23 @@ float dPixZenith = 0.0010908305661643995; // sin(yFov/yRes)
 float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
 const float meterToRad = 1.0 / earthRadiusM;
+
+//#define DBG_STATIC
+float waveHGen(vec2 freqCoord) {
+    float h=0, hi, wi, w_num;
+    vec2 w_dir;
+    for (int i=0; i<w_count; i++) {
+        w_dir = vec2(w_dirs[i][0], w_dirs[i][1]);
+        w_num = length(w_dir);
+        wi = w_dir.x * freqCoord.x + w_dir.y * freqCoord.y;
+#ifndef DBG_STATIC
+        wi += pi2 * cO * (-ubo.time) / (waveDomainSizeM / w_num);
+#endif
+        hi = w_amps[i] * sin(wi) * sqrt(g * bathy) / cO;
+        h += hi;
+    }
+    return h;
+}
 
 void handle_water(inout vec3 vertex_pos_cs) {
     vec3 cam_vertex_dir = normalize((ubo.v_inv * vec4((ubo.p_inv * vec4(inPosition, 1)).xyz, 0)).xyz);
@@ -91,14 +114,19 @@ void handle_water(inout vec3 vertex_pos_cs) {
     if (cam_vertex_length / wave_size_v > 200) {
         wave_size_v *= 1 - smoothstep(200, 300, cam_vertex_length / wave_v0) / 100;
     }
-    float lat_param = ubo.freqCoord.x + lat_dist * worldToFreqCoe;
-    float lng_param = ubo.freqCoord.y + lng_dist * worldToFreqCoe;
-    fragTexCoord = vec2(lng_param, lat_param);
+    vec2 distCoord = vec2(lng_dist, lat_dist);
+    bathy = waterDeepM - texture(bathymetry, ubo.bathyUvMid + distCoord / ubo.bathyRadius / 2).x;
+    bathy = max(0.1, bathy);
+    fragTexCoord = (ubo.freqCoord + distCoord * worldToFreqCoe) * (cO / sqrt(g * bathy));
 
     waterOffsetCoord = vec2(lng_dist, lat_dist) / ubo.waterRadius / 2 + ubo.waterOffset + vec2(0.5);
-    float compH = texture(compImg, waterOffsetCoord).x;
-    float water_height = compH * meterToRad + (sin(fragTexCoord.x / wave_h_domain + ubo.time) + sin(fragTexCoord.y / wave_h_domain + ubo.time)) * wave_size_v;
-
+    float compH;
+    if (waterOffsetCoord.x < 1 && waterOffsetCoord.x > 0 && waterOffsetCoord.y < 1 && waterOffsetCoord.y > 0) {
+        compH = texture(compImg, waterOffsetCoord).x;
+    } else {
+        compH = waveHGen(fragTexCoord);
+    }
+    float water_height = compH * meterToRad;
     gl_Position = ubo.proj * vec4(((ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
 }
 

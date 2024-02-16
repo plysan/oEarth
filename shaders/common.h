@@ -7,6 +7,7 @@ float view_angle_factor = float(scatter_texture_size - 1) / scatter_texture_size
 float scatter_texture_offset = 1.0 / (scatter_texture_size * 2);
 float scatter_texture_scale_factor = float(scatterTextureSunAngleSize - 1) / (scatter_texture_size);
 int scatter_texture_4thd_size_sub_1 = int(pow(float(scatterTextureHeightSize), 2)) - 1;
+const float cO = sqrt(g * waterDeepM);
 
 vec4 getScatterAngles(vec3 up_n_cs, vec3 vertex_pos_n_cs, vec3 sun_n_cs, float height_coord_linear){
     float height_sealevel = height_coord_linear * atmosphereThickness;

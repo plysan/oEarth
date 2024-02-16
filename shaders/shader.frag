@@ -1,5 +1,6 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_EXT_debug_printf : enable
 
 #include "../vars.h"
 #include "common.h"
@@ -15,6 +16,7 @@ layout(location = 7) in vec3 vertex_pos_n_cs;
 layout(location = 8) in float cam_vertex_length;
 layout(location = 9) in vec3 cam_param; // (dlat, dlng, pix_span)
 layout(location = 10) in vec2 waterOffsetCoord;
+layout(location = 11) in float bathy;
 layout(binding = 1) uniform sampler2D texSampler;
 
 layout(std140, binding = 0) uniform UniformBufferObject {
@@ -27,6 +29,9 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     int target;
     vec2 freqCoord;
     vec2 terrainOffset;
+    vec2 bathyUvMid;
+    vec2 bathyRadius;
+    float waterRadius;
     float height;
     float time;
 } ubo;
@@ -37,19 +42,36 @@ vec3 water_refrac = vec3(0.25, 0.7, 1);
 vec3 sun_color = vec3(1) * 4;
 float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
-float dispersions[1][3] = {
-    // h, wx, wy
-    {1.0, 0.1, 0.1},
-};
+float waveDomainSizeMByPi2 = waveDomainSizeM / pi2;
+
+//#define DBG_STATIC
+vec2 waveNormGen(vec2 freqCoord) {
+    vec2 n=vec2(0), ni;
+    float w_num, wi;
+    vec2 w_dir;
+    for (int i=0; i<w_count; i++) {
+        w_dir = vec2(w_dirs[i][0], w_dirs[i][1]);
+        w_num = length(w_dir);
+        wi = w_dir.x * freqCoord.x + w_dir.y * freqCoord.y;
+#ifndef DBG_STATIC
+        wi += pi2 * cO * (-ubo.time) / (waveDomainSizeM / w_num);
+#endif
+        w_dir = normalize(w_dir);
+        ni = w_dir * (w_amps[i] * cos(wi) * sqrt(g * bathy) / cO / (waveDomainSizeMByPi2 / w_num));
+        n += ni;
+    }
+    return -vec2(n.y, n.x);
+}
 
 vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
-    vec4 compH = texture(compNorImg, waterOffsetCoord);
-    vec2 procH = vec2(0.0);
-    for (int i = 0; i < dispersions.length(); i++) {
+    vec4 compH = vec4(0);
+    if (waterOffsetCoord.x < 1 && waterOffsetCoord.x > 0 && waterOffsetCoord.y < 1 && waterOffsetCoord.y > 0) {
+        compH = texture(compNorImg, waterOffsetCoord);
+    } else {
+        compH.xy = waveNormGen(fragTexCoord);
     }
-    vec3 surface_n_cs = normalize(world_offset_n_cs
-            + (compH.x - cos((fragTexCoord.x + delta.x) / wave_h_domain + ubo.time) * h_coe) * lat_n_cs
-            + (compH.y - cos((fragTexCoord.y + delta.y) / wave_h_domain + ubo.time) * h_coe) * lng_n_cs);
+    vec2 procH = vec2(0.0);
+    vec3 surface_n_cs = normalize(world_offset_n_cs + (compH.x) * lat_n_cs + (compH.y) * lng_n_cs);
     float fresnel_sun = 0.02 + 0.98 * pow(1.0 - dot(sun_n_cs, surface_n_cs), 5.0); // Schlick's approximation
     ref_port_sun = exp(-10000 * pow(length(cross(facet_n_cs, surface_n_cs)), 4));
     ref_port_sun = fresnel_sun * ref_port_sun;

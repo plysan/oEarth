@@ -481,17 +481,24 @@ void fillBathymetry(glm::vec2 levelBl, int level, glm::vec2 dstBl, glm::vec2 dst
     }
     ImageSource *srcImg = getImgSource(srcDataStr, NULL);
     float *srcData = (float*)srcImg->data;
-    glm::vec2 srcDataIdxSize = glm::vec2(srcImg->h - 1, srcImg->w - 1);
+    glm::ivec2 srcDataIdxSize = glm::ivec2(srcImg->h - 1, srcImg->w - 1);
     glm::vec2 dstCoordSize = dstTr - dstBl;
     glm::ivec2 dataIdxBl = (glm::ivec2)((dstUvBl - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
     glm::ivec2 dataIdxTr = (glm::ivec2)((dstUvTr - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
-    glm::ivec2 srcIdx = (glm::ivec2)((dstUvBl - srcLevelBl) / levelSize * srcDataIdxSize);
+    glm::ivec2 srcIdx = (glm::ivec2)((dstUvBl - srcLevelBl) / levelSize * (glm::vec2)srcDataIdxSize);
     glm::vec2 srcIdxDel = (glm::dvec2)dstCoordSize / (dstDataSize - 1.0) / ((double)levelSize / (glm::dvec2)srcDataIdxSize);
     glm::vec2 srcIdxCur = srcIdx;
     for (int v = dataIdxBl.x; v <= dataIdxTr.x; v++) {
         for (int u = dataIdxBl.y; u <= dataIdxTr.y; u++) {
-            float srcVal = srcData[(int)(srcDataIdxSize.x - srcIdxCur.x) * srcImg->w + (int)srcIdxCur.y];
-            dstData[v * dstDataSize + u] = glm::clamp(srcVal + waterDeepM, 0.0f, waterDeepM);
+            glm::vec2 srcOf = glm::vec2(srcDataIdxSize.x - srcIdxCur.x, srcIdxCur.y);
+            glm::ivec2 srcOi = glm::ivec2((int)srcOf.x, (int)srcOf.y);
+            glm::vec2 srcPropo = srcOf - (glm::vec2)srcOi;
+            float srcVal = (
+                srcData[srcOi.x * srcImg->w + srcOi.y] * (2 - srcPropo.x - srcPropo.y)
+              + srcData[glm::min(srcDataIdxSize.x, srcOi.x + 1) * srcImg->w + srcOi.y] * srcPropo.x
+              + srcData[srcOi.x * srcImg->w + glm::min(srcDataIdxSize.y, srcOi.y + 1)] * srcPropo.y
+            ) / 2;
+            dstData[(v * dstDataSize + u) * 4] = glm::clamp(srcVal + waterDeepM, 0.0f, waterDeepM);
             srcIdxCur.y += srcIdxDel.y;
         }
         srcIdxCur.x += srcIdxDel.x;
@@ -521,7 +528,7 @@ void fillBathymetry(glm::vec2 dstBl, glm::vec2 dstTr, std::vector<float> &dstDat
         printf("Bathymetry:\n");
         for (int j = dstDataSize-1; j >= 0; j-=80) {
             for (int k = 0; k < dstDataSize; k+=30) {
-                float h = dstData[dstDataSize * j + k];
+                float h = dstData[(dstDataSize * j + k) * 4];
                 std::cout << (h == 1 ? '*' : h == 0 ? '_' : '.');
             }
             printf("\n");
