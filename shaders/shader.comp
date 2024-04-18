@@ -20,7 +20,7 @@ layout(std140, binding = 4) uniform UniformBufferObject {
     float time;
     float scale;
     float dt;
-    float dx;
+    float dx; // = dx * 2
 } ubo;
 
 shared vec4 imgCache[localSize+4][localSize+4];
@@ -31,7 +31,6 @@ const int sideLocalGroups = waterRes / (localSize * localSize);
 const int localWGSize = localSize * localSize;
 const int WEST = 0, EAST = 1, NORTH = 2, SOUTH = 3;
 const float f0 = 0.00000001;
-const int ndx = 1;
 const float cO = sqrt(g * waterDeepM);
 
 void updateHeight(ivec2 cxy, inout vec4 p) {
@@ -41,19 +40,19 @@ void updateHeight(ivec2 cxy, inout vec4 p) {
     vec4 pxn = imgCache[cxy.x-1][cxy.y];
     vec4 pyp = imgCache[cxy.x][cxy.y+1];
     vec4 pyn = imgCache[cxy.x][cxy.y-1];
-    p.x -= (p.x + bathy) * ((pxp.y - pxn.y + pyp.z - pyn.z)) * ubo.dt / ubo.dx / 2;
+    p.x -= (p.x + bathy) * ((pxp.y - pxn.y + pyp.z - pyn.z)) * ubo.dt / ubo.dx;
     if (p.x <= -bathy) {
         p = imgCache[cxy.x][cxy.y] = vec4(0);
     }
     imgCache[cxy.x][cxy.y] = p;
 }
 
-shared vec4 boundaryCache[localWGSize+ndx];
+shared vec4 boundaryCache[localWGSize + 2];
 
 //#define DBG_STATIC
-vec3 waveGen(bool only_in, float bathy, ivec2 coord, vec2 v_dir, vec2 u_dir) {
-    if (bathy < 0.1) return vec3(0);
-    float vi = 0, ui = 0, h = 0, wi, hi, v_comp, u_comp, w_num;
+vec4 waveGen(bool only_in, float bathy, ivec2 coord, vec2 v_dir, vec2 u_dir) {
+    if (bathy < 0.1) return vec4(0);
+    float vi = 0, ui = 0, h = 0, wi, hi, v_comp, u_comp, w_num, cos_in = 0, in_u = 0, in_v = 0;
     float co = sqrt(g * bathy);
     vec2 w_dir;
     for (int i=0; i<w_count; i++) {
@@ -61,20 +60,22 @@ vec3 waveGen(bool only_in, float bathy, ivec2 coord, vec2 v_dir, vec2 u_dir) {
         w_num = length(w_dir);
         w_dir = normalize(w_dir);
         v_comp = dot(v_dir, w_dir);
-        if (only_in && v_comp <= 0) continue;
         u_comp = dot(u_dir, w_dir);
+        in_v += w_amps[i] * v_comp;
+        in_u += w_amps[i] * u_comp;
+        if (only_in && v_comp < f0) continue;
         wi = w_num * w_dir.x * (ubo.freqCoordBl.x + coord.x * ubo.freqCoordDel.x)
            + w_num * w_dir.y * (ubo.freqCoordBl.y + coord.y * ubo.freqCoordDel.y);
         wi *= cO / co;
 #ifndef DBG_STATIC
-        wi += pi2 * cO * (-ubo.time) / (waveDomainSizeM / w_num);
+        wi += pi2 * cO * (-ubo.time - dt) / (waveDomainSizeM / w_num);
 #endif
         hi = w_amps[i] * sin(wi) * co / cO;
         h += hi;
         vi += g / co * hi * v_comp;
         ui += g / co * hi * u_comp;
     }
-    return vec3(vi, ui, h);
+    return vec4(h, vi, ui, in_v == 0 ? 0 : cos(atan(in_u / in_v)));
 }
 
 vec4 boundaryAG(uint side, float bathy, float cosThetaO_old, ivec2 coord, vec2 v_dir, vec2 u_dir, vec3 z, vec3 v, vec3 u) {
@@ -86,21 +87,17 @@ vec4 boundaryAG(uint side, float bathy, float cosThetaO_old, ivec2 coord, vec2 v
     float u_du = u.z - u.x;
     float beta_dv = v.y - v.x + 2 * g * (z.x - z.y) / (cz.x + cz.y);
     float beta_du = v.z - v.x + 2 * g * (z.x - z.z) / (cz.x + cz.z);
-    float beta_1_2_co = v.x - 2 * g * z.x / (co + cz.x) + ubo.dt / (ubo.dx * ndx) * (-v.x * beta_dv + cz.x * (beta_dv + u_du) - u.x * beta_du);
-    float cosThetaI = dot(v_dir, normalize(vec2(w_dirs[0][0], w_dirs[0][1]))); // TODO
-    vec3 genW = cosThetaI > 0 ? waveGen(true, bathy, coord, v_dir, u_dir) : vec3(0);
-    float u_1 = u.x + (-v.x * (u.y - u.x) - u.x * u_du - g * (z.z - z.x)) / (ubo.dx * ndx) * ubo.dt;
-    float u_r = u_1 - genW.y;
-    float v_r = cosThetaO_old / (1 + cosThetaO_old) * (beta_1_2_co - genW.x * (cosThetaI - 1));
-    //float v_r = cosThetaO_old / (1 + cosThetaO_old) * (beta_1_2_co - (abs(cz.x * cosThetaI) < f0 ? 0 : (genW.x * (cz.x * cosThetaI - co) / (cz.x * cosThetaI))));
-    //float beta_1 = (-(v.x - cz.x) * (beta.y - beta.x) - u.x * (beta.z - beta.x) + cz.x * u_du + 0 * g * (z.y - z.x)) / (ubo.dx * ndx) * ubo.dt + beta.x;
-    //float tmp = (4 * cosThetaO_old + 3) * (pow(genW.x, 2) * (3.0 / 4 - cosThetaI) + genW.x * co * (cosThetaI - 1) - co * (beta_1 + 2 * co)) / pow(co * (cosThetaO_old + 1) + genW.x * (cosThetaI - cosThetaO_old - 3.0 / 2), 2);
-    //float v_r = cosThetaO_old * (co * (cosThetaO_old + 1) + genW.x * (cosThetaI - cosThetaO_old - 3.0 / 2)) / (2 * cosThetaO_old + 3.0 / 2) * (sqrt(1 - tmp) - 1);
-    float v_1 = genW.x + v_r;
+    float beta_1_2_co = v.x - 2 * g * z.x / (co + cz.x) + ubo.dt / ubo.dx * (-v.x * beta_dv + cz.x * (beta_dv + u_du) - u.x * beta_du);
+    vec4 genW = waveGen(true, bathy, coord, v_dir, u_dir);
+    float u_1 = u.x + (-v.x * (u.y - u.x) - u.x * u_du - g * (z.z - z.x)) / ubo.dx * ubo.dt;
+    float u_r = u_1 - genW.z;
+    float v_r = cosThetaO_old / (1 + cosThetaO_old) * (beta_1_2_co - (abs(cz.x * genW.w) < f0 ? 0 : (genW.y * (cz.x * genW.w - co) / (cz.x * genW.w))));
+    float v_1 = genW.y + v_r;
     float z_1 = (v_1 - beta_1_2_co) * (co + cz.x/*approx z_1*/) / (2 * g);
     float cosThetaO = abs(v_r) < f0 ? abs(v.x) < f0 ? 0 : cos(atan(u.x/v.x)) : cos(atan(u_r / v_r));
-    //if (isnan(cosThetaO)) debugPrintfEXT("%1.7v4f | %1.7v3f | %1.7v4f", beta_1_2_co, v.x, z.x, co, cz, beta_dv, u_du, u.x, beta_du);
-    return vec4(z_1, v_1, u_1, cosThetaO);
+    float coe = smoothstep(0, 0.5, abs(u_r) + abs(v_r));
+    float cosThetaOCoe = coe * cosThetaO + (1-coe) * abs(genW.w);
+    return vec4(z_1, v_1, u_1, cosThetaOCoe);
 }
 
 //#define DBG_BATHY
@@ -110,117 +107,111 @@ void main() {
         uint side = gl_WorkGroupID.x / sideLocalGroups;
         uint sideIdx = (gl_WorkGroupID.x % sideLocalGroups) * localWGSize + gl_LocalInvocationIndex;
         int localInvocationIdx = int(gl_LocalInvocationIndex);
-        ivec2 coord, coord_v;
+        ivec2 coord, coord_v, coord_u, coord_out;
         switch (side) {
-            case WEST:  coord = ivec2(1, sideIdx);          coord_v = ivec2(1+ndx, sideIdx); break;
-            case EAST:  coord = ivec2(waterRes-2, sideIdx); coord_v = ivec2(waterRes-2-ndx, sideIdx); break;
-            case NORTH: coord = ivec2(sideIdx, waterRes-2); coord_v = ivec2(sideIdx, waterRes-2-ndx); break;
-            case SOUTH: coord = ivec2(sideIdx, 1);          coord_v = ivec2(sideIdx, 1+ndx); break;
+            case WEST:  coord = ivec2(1, sideIdx);          coord_v = ivec2(3, sideIdx); break;
+            case EAST:  coord = ivec2(waterRes-2, sideIdx); coord_v = ivec2(waterRes-4, sideIdx); break;
+            case NORTH: coord = ivec2(sideIdx, waterRes-2); coord_v = ivec2(sideIdx, waterRes-4); break;
+            case SOUTH: coord = ivec2(sideIdx, 1);          coord_v = ivec2(sideIdx, 3); break;
         }
-        vec4 val = imageLoad(imgIn, coord);
-        vec4 val_out = imageLoad(imgOut, coord);
-        vec4 val_v = imageLoad(imgIn, coord_v);
         float bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + coord * ubo.bathyUvDel).x;
-        boundaryCache[gl_LocalInvocationIndex] = val;
-        int idx_u;
-        if (gl_LocalInvocationIndex < ndx) {
-            switch (side) {
-                case WEST:  idx_u = localWGSize + localInvocationIdx; coord = ivec2(1, min(waterRes-1, sideIdx + localWGSize + gl_LocalInvocationIndex)); break;
-                case EAST:  idx_u = localWGSize + localInvocationIdx; coord = ivec2(waterRes-2, max(0, sideIdx - ndx + gl_LocalInvocationIndex)); break;
-                case NORTH: idx_u = localWGSize + localInvocationIdx; coord = ivec2(min(waterRes-1, sideIdx + localWGSize + gl_LocalInvocationIndex), waterRes-2); break;
-                case SOUTH: idx_u = localWGSize + localInvocationIdx; coord = ivec2(max(0, sideIdx - ndx + gl_LocalInvocationIndex), 1); break;
-            }
-            boundaryCache[idx_u] = imageLoad(imgIn, coord);
-        }
-        memoryBarrierShared();
-        barrier();
         vec4 result;
         vec2 dir_v, dir_u;
+        int idx_u;
         switch (side) {
             case WEST:
                 dir_v = vec2(1, 0); dir_u = vec2(0, 1);
                 if (ubo.iOffset.x < 0) {
                     for (int i = -ubo.iOffset.x; i > -1; i--) {
-                        result.xyz = waveGen(false, bathy, ivec2(i, sideIdx), dir_v, dir_u);
-                        imageStore(imgOut, ivec2(i, sideIdx), vec4(result.z, result.x, result.y, 0));
+                        result = waveGen(false, bathy, ivec2(i, sideIdx), dir_v, dir_u);
+                        imageStore(imgOut, ivec2(i, sideIdx), result);
                     }
                     return;
                 }
+                idx_u = localInvocationIdx + 2;
                 break;
             case EAST:
                 dir_v = vec2(-1, 0); dir_u = vec2(0, -1);
                 if (ubo.iOffset.x > 0) {
                     for (int i = ubo.iOffset.x; i > -1; i--) {
-                        result.xyz = waveGen(false, bathy, ivec2(waterRes-1-i, sideIdx), dir_v, dir_u);
-                        imageStore(imgOut, ivec2(waterRes-1-i, sideIdx), vec4(result.z, -result.x, -result.y, 0));
+                        result = waveGen(false, bathy, ivec2(waterRes-1-i, sideIdx), dir_v, dir_u);
+                        imageStore(imgOut, ivec2(waterRes-1-i, sideIdx), vec4(result.x, -result.y, -result.z, result.w));
                     }
                     return;
                 }
+                idx_u = localInvocationIdx - 2;
+                if (idx_u < 0) idx_u = localWGSize + 2 + idx_u;
                 break;
             case NORTH:
                 dir_v = vec2(0, -1); dir_u = vec2(1, 0);
                 if (ubo.iOffset.y > 0) {
-                    for (int i = ubo.iOffset.y; i > -1; i--) {
-                        result.xyz = waveGen(false, bathy, ivec2(sideIdx, waterRes-1-i), dir_v, dir_u);
-                        imageStore(imgOut, ivec2(sideIdx, waterRes-1-i), vec4(result.z, result.y, -result.x, 0));
+                    for (int i = ubo.iOffset.y+1; i > -1; i--) {
+                        result = waveGen(false, bathy, ivec2(sideIdx, waterRes-1-i), dir_v, dir_u);
+                        result = vec4(result.x, result.z, -result.y, result.w);
+                        imageStore(imgOut, ivec2(sideIdx, waterRes-1-i), result);
                     }
                     return;
                 }
+                idx_u = localInvocationIdx + 2;
                 break;
             case SOUTH:
                 dir_v = vec2(0, 1); dir_u = vec2(-1, 0);
                 if (ubo.iOffset.y < 0) {
                     for (int i = -ubo.iOffset.y; i > -1; i--) {
-                        result.xyz = waveGen(false, bathy, ivec2(sideIdx, i), dir_v, dir_u);
-                        imageStore(imgOut, ivec2(sideIdx, i), vec4(result.z, -result.y, result.x, 0));
+                        result = waveGen(false, bathy, ivec2(sideIdx, i), dir_v, dir_u);
+                        imageStore(imgOut, ivec2(sideIdx, i), vec4(result.x, -result.z, result.y, result.w));
                     }
                     return;
                 }
+                idx_u = localInvocationIdx - 2;
+                if (idx_u < 0) idx_u = localWGSize + 2 + idx_u;
                 break;
         }
-        if (sideIdx == 0 || sideIdx == waterRes-1) return;
+        vec4 val = imageLoad(imgOut, coord);
+        boundaryCache[gl_LocalInvocationIndex] = val;
+        if (localInvocationIdx < 2) {
+            switch (side) {
+                case WEST:  coord_u = ivec2(1, min(waterRes-1, sideIdx+localWGSize)); break;
+                case EAST:  coord_u = ivec2(waterRes-2, max(0, sideIdx-2)); break;
+                case NORTH: coord_u = ivec2(min(waterRes-1, sideIdx+localWGSize), waterRes-2); break;
+                case SOUTH: coord_u = ivec2(max(0, sideIdx-2), 1); break;
+            }
+            boundaryCache[localWGSize + localInvocationIdx] = imageLoad(imgOut, coord_u);
+        }
+        switch (side) {
+            case WEST: if (sideIdx == waterRes - 1) return; break;
+            case EAST: if (sideIdx == 0) return; break;
+            case NORTH: if (sideIdx == waterRes - 1) return; break;
+            case SOUTH: if (sideIdx == 0) return; break;
+        }
+        memoryBarrierShared();
+        barrier();
         vec3 z, v, u;
-        switch (side) {
-            case WEST:  idx_u = localInvocationIdx + ndx; break;
-            case EAST:  idx_u = localInvocationIdx - ndx; if (idx_u < 0) idx_u += localWGSize + ndx; break;
-            case NORTH: idx_u = localInvocationIdx + ndx; break;
-            case SOUTH: idx_u = localInvocationIdx - ndx; if (idx_u < 0) idx_u += localWGSize + ndx; break;
-        }
         vec4 val_u = boundaryCache[idx_u];
+        vec4 val_v = imageLoad(imgOut, coord_v);
         switch (side) {
-            case WEST:  z = vec3(val.x, val_v.x, val_u.x); v =  vec3(val.y, val_v.y, val_u.y); u =  vec3(val.z, val_v.z, val_u.z); break;
-            case EAST:  z = vec3(val.x, val_v.x, val_u.x); v = -vec3(val.y, val_v.y, val_u.y); u = -vec3(val.z, val_v.z, val_u.z); break;
-            case NORTH: z = vec3(val.x, val_v.x, val_u.x); v = -vec3(val.z, val_v.z, val_u.z); u =  vec3(val.y, val_v.y, val_u.y); break;
-            case SOUTH: z = vec3(val.x, val_v.x, val_u.x); v =  vec3(val.z, val_v.z, val_u.z); u = -vec3(val.y, val_v.y, val_u.y); break;
+            case WEST:  z = vec3(val.x, val_v.x, val_u.x); v =  vec3(val.y, val_v.y, val_u.y); u =  vec3(val.z, val_v.z, val_u.z); coord_out = ivec2(0, sideIdx); break;
+            case EAST:  z = vec3(val.x, val_v.x, val_u.x); v = -vec3(val.y, val_v.y, val_u.y); u = -vec3(val.z, val_v.z, val_u.z); coord_out = ivec2(waterRes-1, sideIdx); break;
+            case NORTH: z = vec3(val.x, val_v.x, val_u.x); v = -vec3(val.z, val_v.z, val_u.z); u =  vec3(val.y, val_v.y, val_u.y); coord_out = ivec2(sideIdx, waterRes-1); break;
+            case SOUTH: z = vec3(val.x, val_v.x, val_u.x); v =  vec3(val.z, val_v.z, val_u.z); u = -vec3(val.y, val_v.y, val_u.y); coord_out = ivec2(sideIdx, 0); break;
         }
-        result = boundaryAG(side, bathy, val.w, coord, dir_v, dir_u, z, v, u);
+        float w = imageLoad(imgOut, coord_out).w;
+        result = boundaryAG(side, bathy, w, coord, dir_v, dir_u, z, v, u);
         switch (side) {
-            case WEST:
-                coord_v = ivec2(0, sideIdx);
-                val_out.w = result.w;
-                break;
-            case EAST:
-                coord_v = ivec2(waterRes-1, sideIdx);
-                result.y = -result.y;
-                val_out.w = result.w;
-                break;
+            case WEST: break;
+            case EAST: result.y = -result.y; break;
             case NORTH:
-                coord_v = ivec2(sideIdx, waterRes-1);
-                val_out.w = result.w;
-                result.w = result.z;
+                w = result.z;
                 result.z = -result.y;
-                result.y = result.w;
+                result.y = w;
                 break;
             case SOUTH:
-                coord_v = ivec2(sideIdx, 0);
-                val_out.w = result.w;
-                result.w = -result.z;
+                w = -result.z;
                 result.z = result.y;
-                result.y = result.w;
+                result.y = w;
                 break;
         }
-        imageStore(imgOut, coord_v, result);
-        imageStore(imgOut, coord, val_out);
+        imageStore(imgOut, coord_out, result);
         return;
     }
 
@@ -234,11 +225,14 @@ void main() {
         ivec2 coordScaled = ivec2((xy - waterResHalf) * ubo.scale + waterResHalf);
         if (coordScaled.x < waterRes-1 && coordScaled.x > 0 && coordScaled.y < waterRes-1 && coordScaled.y > 0) {
             p = imageLoad(imgIn, coordScaled);
-            imageStore(imgOut, xy, p);
         } else {
-            p.xyz = waveGen(false, bathy, xy, vec2(1, 0), vec2(0, 1));
-            imageStore(imgOut, xy, vec4(p.z, p.x, p.y, 0));
+            vec2 dir_v = vec2(1, 0), dir_u = vec2(0, 1); // default west
+            if (xy.x == waterRes-1 && xy.y > 0) {dir_v = vec2(-1, 0); dir_u = vec2(0, -1);}
+            if (xy.x < waterRes-1 && xy.y == waterRes-1) {dir_v = vec2(0, -1); dir_u = vec2(1, 0);}
+            if (xy.x > 0 && xy.y == 0) {dir_v = vec2(0, 1); dir_u = vec2(-1, 0);}
+            p = waveGen(false, bathy, xy, dir_v, dir_u);
         }
+        imageStore(imgOut, xy, p);
         return;
     }
 
@@ -301,11 +295,11 @@ void main() {
     pxp = imgCache[cxy.x+1][cxy.y];
     pyp = imgCache[cxy.x][cxy.y+1];
 #ifndef DBG_STATIC
-    float damp = bathyCache[cxy.x][cxy.y] + 5;
-    p.y = clamp(p.y + g * (pxn.x - pxp.x) * ubo.dt / ubo.dx / 2, -damp, damp);
-    p.z = clamp(p.z + g * (pyn.x - pyp.x) * ubo.dt / ubo.dx / 2, -damp, damp);
+    float damp = bathyCache[cxy.x][cxy.y] / 3;
+    p.y = clamp(p.y + g * (pxn.x - pxp.x) * ubo.dt / ubo.dx, -damp, damp);
+    p.z = clamp(p.z + g * (pyn.x - pyp.x) * ubo.dt / ubo.dx, -damp, damp);
 #endif
 #endif
-    imageStore(normal, xy, vec4((pyn.x - pyp.x) / ubo.dx / 2, (pxn.x - pxp.x) / ubo.dx / 2, 0, 0));
+    imageStore(normal, xy, vec4((pyn.x - pyp.x) / ubo.dx, (pxn.x - pxp.x) / ubo.dx, 0, 0));
     imageStore(imgOut, xy, p);
 }

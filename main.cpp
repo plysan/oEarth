@@ -1,6 +1,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define GLM_ENABLE_EXPERIMENTAL
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -663,8 +664,8 @@ private:
         double cos_lat = glm::cos(worldCoord.x);
 
         double ele = glm::max(0.0, glm::length(camera.pos) - 1.0);
-        static double spanTan = glm::tan(75.0 / 180.0 * glm::pi<double>());
-        double waterRadius = glm::max(0.0002, ele * spanTan);
+        static double spanTan = glm::tan(80.0 / 180.0 * glm::pi<double>());
+        double waterRadius = glm::max(0.00005, ele * spanTan);
         static glm::dvec2 waveRectSize = glm::dvec2(waveDomainSize, waveDomainSize / cos_lat);
         fParams[2].freqCoord = glm::fmod(worldCoord / waveRectSize * pi2, pi2);
         fParams[2].freqCoord = glm::vec2(fParams[2].freqCoord.y, fParams[2].freqCoord.x);

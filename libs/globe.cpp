@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <tiffio.h>
 #include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/common.hpp>
 #include <glm/gtx/vector_angle.hpp>
 #include <glm/gtc/constants.hpp>
@@ -498,6 +499,7 @@ void fillBathymetry(glm::vec2 levelBl, int level, glm::vec2 dstBl, glm::vec2 dst
               + srcData[glm::min(srcDataIdxSize.x, srcOi.x + 1) * srcImg->w + srcOi.y] * srcPropo.x
               + srcData[srcOi.x * srcImg->w + glm::min(srcDataIdxSize.y, srcOi.y + 1)] * srcPropo.y
             ) / 2;
+            if (std::isnan(srcVal)) srcVal = 0.0f;
             dstData[(v * dstDataSize + u) * 4] = glm::clamp(srcVal + waterDeepM, 0.0f, waterDeepM);
             srcIdxCur.y += srcIdxDel.y;
         }

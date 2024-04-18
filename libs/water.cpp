@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/common.hpp>
 #include <glm/gtx/string_cast.hpp>
 
@@ -172,7 +173,7 @@ glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 worldCoord, double &waterRadius, 
     static double waterBathyPropo = waterRadius / bathyRadius.x;
     static double bathyUvBlOrig = 0.5 - 0.5 * waterBathyPropo, bathyUvDel = 1.0 / (waterRes-1) * waterBathyPropo;
     static glm::dvec2 waterDel = glm::dvec2(waterRadius * 2 / (waterRes-1), waterRadius * 2 / (waterRes-1) / cos_lat);
-    static double dx = waterDel.x * 6378000;
+    static double dx = waterDel.x * earthRadiusM * 2;
     double scale = waterRadius / waterRadiusOld;
     glm::dvec2 waterCoord, waterCoordFrac;
     glm::ivec2 waterICoord, waterICoordDel;
@@ -191,7 +192,7 @@ glm::dvec2 WaterGrid::updateWOffset(glm::dvec2 worldCoord, double &waterRadius, 
         bathyUvDel = 1.0 / (waterRes-1) * waterBathyPropo;
         bathyUvBlOrig = 0.5 - 0.5 * waterBathyPropo;
         waterDel = glm::dvec2(waterRadius * 2 / (waterRes-1), waterRadius * 2 / (waterRes-1) / cos_lat);
-        dx = waterDel.x * 6378000; //TODO make constant
+        dx = waterDel.x * earthRadiusM * 2;
         glm::dvec2 waterCoord = worldCoord / waterDel;
         waterICoord = glm::round(waterCoord);
         waterCoordFrac = waterCoord - (glm::dvec2)waterICoord;
