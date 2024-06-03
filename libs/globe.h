@@ -17,11 +17,12 @@ struct TriNode {
     glm::dvec2 coord_1;
     glm::dvec2 coord_2;
     glm::dvec2 coord_3;
+    glm::vec3 bathy;
+    TriNode *parent;
+    std::vector<TriNode> child;
     glm::vec2 tex_1;
     glm::vec2 tex_2;
     glm::vec2 tex_3;
-    std::vector<TriNode> child;
-    TriNode *parent;
     std::string tex_source_0;
     std::string tex_source_1;
 };
@@ -37,7 +38,7 @@ public:
     void genGlobe(glm::dvec3 camPos);
 };
 
-void fillBathymetry(glm::vec2 dstBl, glm::vec2 dstTr, std::vector<float> &dstData, int dstDataSize);
+void fillBathymetry(glm::dvec2 dstBl, glm::dvec2 dstTr, float* dstData, int dstDataSize);
 
 #endif // TETRAHEDRAL_GLOBE_H
 

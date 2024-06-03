@@ -1117,7 +1117,7 @@ void createDescriptorSets(VkDescriptorPool descriptorPool, uint32_t descSetCount
             VkWriteDescriptorSet compNorImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, renderDescSets[descSetIdx],
                 static_cast<uint32_t>(imageViews.size() + 2), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &compNorImageInfo, NULL, NULL};
             descriptorWrites.push_back(compNorImageWrite);
-            VkDescriptorImageInfo bathyImageInfo{waterGrid.bathymetrySampler, waterGrid.bathymetryImgView, VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo bathyImageInfo{waterGrid.bathymetrySampler, waterGrid.bathymetryImgView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
             VkWriteDescriptorSet bathyImageWrite{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, NULL, renderDescSets[descSetIdx],
                 static_cast<uint32_t>(imageViews.size() + 3), 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bathyImageInfo, NULL, NULL};
             descriptorWrites.push_back(bathyImageWrite);

@@ -166,14 +166,17 @@ private:
     bool framebufferResized = false;
     std::vector<VkDescriptorSet> renderDescSets;
     StagingBufferStruct sbs;
-    glm::vec3 initPos = coord2Pos(42.24f, 3.131f, 0.00001f);
+    //glm::vec3 initPos = coord2Pos(42.1483f, 3.72775f, 0.000005f); // ocean
+    glm::vec3 initPos = coord2Pos(42.2353f, 3.26535f, 0.000005f); // cliff
+    //glm::vec3 initPos = coord2Pos(42.2546f, 3.1774f, 0.000005f); // beach
     Camera camera{
         .pos = initPos,
         .dir = glm::dvec3(initPos.x, initPos.y, initPos.z+0.5f),
-        .fov = 45.0f
+        .fov = 65.0f
     };
     glm::dvec3 lastCameraPos;
-    bool inUpdate = false;
+    bool renderUpdate = false;
+    bool bathyUpdate = false;
     FrameParam fParams[3];
     long frame_count = 0, frame_count_last = 0;
 
@@ -210,13 +213,13 @@ private:
         createCommandPool(commandPool, phyDevGraphFamilyIdx);
         createDepthResources(swapChainExtent, depthImage, depthImageMemory, depthImageView);
         createFramebuffers(renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
+        water_grid.createImgs(computeQueue, commandPool, camera.pos);
         createStagingBufferStruct();
         terrainImageView = createImageView(terrainImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 2);
         scatterImageView = createImageView(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 3);
         createSampler(terrainSampler);
         createSampler(scatterSampler);
         createUniformBuffers();
-        water_grid.createImgs(computeQueue, commandPool, camera.pos);
         uint32_t descSetCount/*TODO*/ = swapChainImages.size() * water_grid.compImgSets;
         createDescriptorPool(descriptorPool, descSetCount, {
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, descSetCount},
@@ -265,7 +268,9 @@ private:
     void displayFps() {
         while (true) {
             std::stringstream ss;
-            ss << "fps: " << (frame_count - frame_count_last) * 2;
+            glm::dvec2 curCoord = dPos2DCoord(camera.pos);
+            curCoord = curCoord / glm::pi<double>() * 180.0;
+            ss << "fps: " << (frame_count - frame_count_last) * 2 << ", coord: " << curCoord.x << ", " << curCoord.y;
             frame_count_last = frame_count;
             glfwSetWindowTitle(window, ss.str().c_str());
             std::this_thread::sleep_for (std::chrono::milliseconds(500));
@@ -356,6 +361,8 @@ private:
         sbs.water_idx_max = 2300000;
         lastCameraPos = camera.pos;
         globe.genGlobe(lastCameraPos);
+        water_grid.stageBathymetry(lastCameraPos);
+        water_grid.updateBathymetry(graphicsQueue, commandPool);
         sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
         skyDome.genSkyDome(lastCameraPos);
         sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
@@ -373,7 +380,7 @@ private:
 
     void updateStagingBufferStruct() {
         while (true) {
-            if (inUpdate) {
+            if (renderUpdate) {
                 double distanceMoved = glm::distance(lastCameraPos, camera.pos);
                 if (distanceMoved > UPDATE_DISTANCE) {
                     lastCameraPos = camera.pos;
@@ -383,7 +390,8 @@ private:
                     //TODO atomic
                     sbs.terrainVertSize = std::min(sbs.terrainVertMax, (int)globe.vertices.size());
                     sbs.skyIdxSize = std::min(sbs.skyIdxMax, (int)skyDome.indices.size());
-                    inUpdate = false;
+                    water_grid.stageBathymetry(lastCameraPos);
+                    renderUpdate = false;
                 }
             }
             std::this_thread::sleep_for (std::chrono::seconds(2));
@@ -519,7 +527,25 @@ private:
         //std::this_thread::sleep_for (std::chrono::milliseconds(100));
         static double maxCost = 0.0;
         clock_t stamp1 = clock();
-        if (!inUpdate) {
+
+        static VkFence lastFence = inFlightFences[currentFrame];
+        vkWaitForFences(logicalDevice, 1, &lastFence, VK_TRUE, UINT64_MAX);
+        lastFence = inFlightFences[currentFrame];
+        uint32_t imageIndex;
+        VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapChain();
+            return;
+        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
+        // Check if a previous frame is using this image (i.e. there is its fence to wait on)
+        if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+            vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+        }
+        // Mark the image as now being in use by this frame
+        imagesInFlight[imageIndex] = inFlightFences[currentFrame];
+        if (!renderUpdate) {
             copyBuffer(vertStagingBuffer, vertexBuffer, 0, 0, sizeof(Vertex) * std::min((int)globe.vertices.size(), sbs.terrainVertMax));
             copyBuffer(vertStagingBuffer, vertexBuffer, sizeof(Vertex) * sbs.terrainVertMax, sizeof(Vertex) * sbs.terrainVertMax,
                     sizeof(Vertex) * std::min((int)skyDome.vertices.size(), sbs.skyVertMax));
@@ -541,26 +567,9 @@ private:
             fParams[0].wordOffset = globe.camOffset;
             fParams[1].wordOffset = glm::vec3(0);
             fParams[2].wordOffset = globe.camOffset;
-            inUpdate = true;
+            water_grid.updateBathymetry(graphicsQueue, commandPool);
+            renderUpdate = true;
         }
-        static VkFence lastFence = inFlightFences[currentFrame];
-        vkWaitForFences(logicalDevice, 1, &lastFence, VK_TRUE, UINT64_MAX);
-        lastFence = inFlightFences[currentFrame];
-        uint32_t imageIndex;
-        VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            recreateSwapChain();
-            return;
-        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            throw std::runtime_error("failed to acquire swap chain image!");
-        }
-        // Check if a previous frame is using this image (i.e. there is its fence to wait on)
-        if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-            vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
-        }
-        // Mark the image as now being in use by this frame
-        imagesInFlight[imageIndex] = inFlightFences[currentFrame];
-
         clock_t stamp2 = clock();
         updateUniformBuffer(imageIndex);
         clock_t stamp3 = clock();
@@ -615,7 +624,9 @@ private:
             static float last_time = 0.0f;
             float cur_time = glfwGetTime();
             std::stringstream ss;
-            ss << "fps: " << (frame_count - frame_count_last) / (cur_time - last_time);
+            glm::dvec2 curCoord = dPos2DCoord(camera.pos);
+            curCoord = curCoord / glm::pi<double>() * 180.0;
+            ss << "fps: " << (frame_count - frame_count_last) / (cur_time - last_time) << ", coord: " << curCoord.x << ", " << curCoord.y;
             frame_count_last = frame_count;
             last_time = cur_time;
             glfwSetWindowTitle(window, ss.str().c_str());

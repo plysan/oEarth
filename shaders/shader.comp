@@ -20,11 +20,10 @@ layout(std140, binding = 4) uniform UniformBufferObject {
     float time;
     float scale;
     float dt;
-    float dx; // = dx * 2
+    float dxd; // dx * 2
 } ubo;
 
 shared vec4 imgCache[localSize+4][localSize+4];
-shared float bathyCache[localSize+4][localSize+4];
 const float sqrtG = sqrt(g);
 const ivec2 waterResHalf = ivec2(waterRes / 2);//TODO
 const int sideLocalGroups = waterRes / (localSize * localSize);
@@ -35,14 +34,14 @@ const float cO = sqrt(g * waterDeepM);
 
 void updateHeight(ivec2 cxy, inout vec4 p) {
     p = imgCache[cxy.x][cxy.y];
-    float bathy = bathyCache[cxy.x][cxy.y];
     vec4 pxp = imgCache[cxy.x+1][cxy.y];
     vec4 pxn = imgCache[cxy.x-1][cxy.y];
     vec4 pyp = imgCache[cxy.x][cxy.y+1];
     vec4 pyn = imgCache[cxy.x][cxy.y-1];
-    p.x -= (p.x + bathy) * ((pxp.y - pxn.y + pyp.z - pyn.z)) * ubo.dt / ubo.dx;
-    if (p.x <= -bathy) {
-        p = imgCache[cxy.x][cxy.y] = vec4(0);
+    if (p.w > f0) {
+        float del = (pxp.w * pxp.y - pxn.w * pxn.y + pyp.w * pyp.z - pyn.w * pyn.z) * ubo.dt / ubo.dxd;
+        p.x -= del;
+        p.w -= del;
     }
     imgCache[cxy.x][cxy.y] = p;
 }
@@ -50,6 +49,7 @@ void updateHeight(ivec2 cxy, inout vec4 p) {
 shared vec4 boundaryCache[localWGSize + 2];
 
 //#define DBG_STATIC
+//#define DBG_BATHY
 vec4 waveGen(bool only_in, float bathy, ivec2 coord, vec2 v_dir, vec2 u_dir) {
     if (bathy < 0.1) return vec4(0);
     float vi = 0, ui = 0, h = 0, wi, hi, v_comp, u_comp, w_num, cos_in = 0, in_u = 0, in_v = 0;
@@ -80,16 +80,16 @@ vec4 waveGen(bool only_in, float bathy, ivec2 coord, vec2 v_dir, vec2 u_dir) {
 
 vec4 boundaryAG(uint side, float bathy, float cosThetaO_old, ivec2 coord, vec2 v_dir, vec2 u_dir, vec3 z, vec3 v, vec3 u) {
     vec3 h = z + bathy;
-    if (h.x < f0 || h.y < f0 || h.z < f0) return vec4(0);
+    if (h.x < f0 || h.y < f0 || h.z < f0 || bathy < f0) return vec4(0);
     vec3 cz = sqrt(g * h);
     vec3 beta = v - 2 * cz;
     float co = sqrt(g * bathy);
     float u_du = u.z - u.x;
     float beta_dv = v.y - v.x + 2 * g * (z.x - z.y) / (cz.x + cz.y);
     float beta_du = v.z - v.x + 2 * g * (z.x - z.z) / (cz.x + cz.z);
-    float beta_1_2_co = v.x - 2 * g * z.x / (co + cz.x) + ubo.dt / ubo.dx * (-v.x * beta_dv + cz.x * (beta_dv + u_du) - u.x * beta_du);
+    float beta_1_2_co = v.x - 2 * g * z.x / (co + cz.x) + ubo.dt / ubo.dxd * (-v.x * beta_dv + cz.x * (beta_dv + u_du) - u.x * beta_du);
     vec4 genW = waveGen(true, bathy, coord, v_dir, u_dir);
-    float u_1 = u.x + (-v.x * (u.y - u.x) - u.x * u_du - g * (z.z - z.x)) / ubo.dx * ubo.dt;
+    float u_1 = u.x + (-v.x * (u.y - u.x) - u.x * u_du - g * (z.z - z.x)) / ubo.dxd * ubo.dt;
     float u_r = u_1 - genW.z;
     float v_r = cosThetaO_old / (1 + cosThetaO_old) * (beta_1_2_co - (abs(cz.x * genW.w) < f0 ? 0 : (genW.y * (cz.x * genW.w - co) / (cz.x * genW.w))));
     float v_1 = genW.y + v_r;
@@ -100,7 +100,6 @@ vec4 boundaryAG(uint side, float bathy, float cosThetaO_old, ivec2 coord, vec2 v
     return vec4(z_1, v_1, u_1, cosThetaOCoe);
 }
 
-//#define DBG_BATHY
 void main() {
     if (ubo.stage == 1) { //TODO standalone shader
         if (ubo.scale != 1.0) return;
@@ -219,8 +218,8 @@ void main() {
     ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
     ivec2 cxy = ivec2(lxy + ivec2(2));
     vec4 p, pxn, pyn, pxp, pyp;
+    float bathy, pw;
 
-    float bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x;
     if (ubo.scale != 1.0) {
         ivec2 coordScaled = ivec2((xy - waterResHalf) * ubo.scale + waterResHalf);
         if (coordScaled.x < waterRes-1 && coordScaled.x > 0 && coordScaled.y < waterRes-1 && coordScaled.y > 0) {
@@ -230,14 +229,28 @@ void main() {
             if (xy.x == waterRes-1 && xy.y > 0) {dir_v = vec2(-1, 0); dir_u = vec2(0, -1);}
             if (xy.x < waterRes-1 && xy.y == waterRes-1) {dir_v = vec2(0, -1); dir_u = vec2(1, 0);}
             if (xy.x > 0 && xy.y == 0) {dir_v = vec2(0, 1); dir_u = vec2(-1, 0);}
+            bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x;
             p = waveGen(false, bathy, xy, dir_v, dir_u);
         }
         imageStore(imgOut, xy, p);
         return;
     }
 
-    bathyCache[cxy.x][cxy.y] = bathy;
-    imgCache[cxy.x][cxy.y] = imageLoad(imgIn, xy + ubo.iOffset);
+#ifdef DBG_STATIC
+    p = imageLoad(imgIn, xy + ubo.iOffset);
+    pxn = imageLoad(imgIn, (xy + ivec2(-1, 0)) + ubo.iOffset);
+    pxp = imageLoad(imgIn, (xy + ivec2(1, 0)) + ubo.iOffset);
+    pyn = imageLoad(imgIn, (xy + ivec2(0, -1)) + ubo.iOffset);
+    pyp = imageLoad(imgIn, (xy + ivec2(0, 1)) + ubo.iOffset);
+#endif
+#ifdef DBG_BATHY
+    p.x = texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x - waterDeepM;
+    pxn.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(-1, 0)) * ubo.bathyUvDel).x - waterDeepM;
+    pxp.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(1, 0)) * ubo.bathyUvDel).x - waterDeepM;
+    pyn.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(0, -1)) * ubo.bathyUvDel).x - waterDeepM;
+    pyp.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(0, 1)) * ubo.bathyUvDel).x - waterDeepM;
+#endif
+#if !defined(DBG_STATIC) && !defined(DBG_BATHY)
     if (lxy.y < 8) {
         ivec2 srcCoord, dstCoord;
         if (lxy.y < 2) {
@@ -254,18 +267,43 @@ void main() {
             dstCoord = ivec2(lxy.y+localSize-4, cxy.x);
         }
         bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + srcCoord * ubo.bathyUvDel).x;
-        bathyCache[dstCoord.x][dstCoord.y] = bathy;
-        imgCache[dstCoord.x][dstCoord.y] = imageLoad(imgIn, srcCoord + ubo.iOffset);
+        p = imageLoad(imgIn, srcCoord + ubo.iOffset);
+        p.x = max(p.x, -bathy);
+        p.w = p.x + bathy;
+        imgCache[dstCoord.x][dstCoord.y] = p;
     }
     if (lxy.x % (localSize-1) == 0 && lxy.y % (localSize-1) == 0) {
         ivec2 lOffset = ivec2(lxy.x == 0 ? -1 : 1, lxy.y == 0 ? -1 : 1);
         bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + (xy + lOffset) * ubo.bathyUvDel).x;
-        bathyCache[cxy.x + lOffset.x][cxy.y + lOffset.y] = bathy;
-        imgCache[cxy.x + lOffset.x][cxy.y + lOffset.y] = imageLoad(imgIn, xy + ubo.iOffset + lOffset);
+        p = imageLoad(imgIn, xy + ubo.iOffset + lOffset);
+        p.x = max(p.x, -bathy);
+        p.w = p.x + bathy;
+        imgCache[cxy.x + lOffset.x][cxy.y + lOffset.y] = p;
+    }
+    bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x;
+    p = imageLoad(imgIn, xy + ubo.iOffset);
+    pw = p.w;
+    p.x = max(p.x, -bathy);
+    p.w = p.x + bathy;
+    imgCache[cxy.x][cxy.y] = p;
+    memoryBarrierShared();
+    barrier();
+    if (xy.x > 1 && xy.x < waterRes-2 && xy.y > 1 && xy.y < waterRes-2) {
+        ivec2 br, tl, tr;
+        if (p.y > 0) {tl.x = 0; br.x = tr.x = -1;}
+        else         {tl.x = 0;  br.x = tr.x = 1;}
+        if (p.z > 0) {br.y = 0; tl.y = tr.y = -1;}
+        else         {br.y = 0;  tl.y = tr.y = 1;}
+        pxp = imgCache[cxy.x + tr.x][cxy.y + tr.y];
+        pxn = imgCache[cxy.x + tl.x][cxy.y + tl.y];
+        pyp = imgCache[cxy.x + br.x][cxy.y + br.y];
+        vec2 pp = clamp(abs(p.yz) * ubo.dt / (ubo.dxd / 2), 0, 1);
+        p = mix(mix(p, pyp, pp.x), mix(pxn, pxp, pp.x), pp.y);
+        p.x = p.w - bathy;
+        imgCache[cxy.x][cxy.y] = p;
     }
     memoryBarrierShared();
     barrier();
-#ifndef DBG_STATIC
     if (xy.x > 0 || xy.x < waterRes-1 || xy.y > 0 || xy.y < waterRes-1) {
         const int secondLast = localSize + 2;
         if (lxy.y == 0) {
@@ -279,27 +317,24 @@ void main() {
         }
         updateHeight(cxy, p);
     }
-#endif
     memoryBarrierShared();
     barrier();
-#ifdef DBG_BATHY
-    p.x = -bathyCache[cxy.x][cxy.y];
-    pxn.x = -bathyCache[cxy.x-1][cxy.y];
-    pyn.x = -bathyCache[cxy.x][cxy.y-1];
-    pxp.x = -bathyCache[cxy.x+1][cxy.y];
-    pyp.x = -bathyCache[cxy.x][cxy.y+1];
-#else
-    p = imgCache[cxy.x][cxy.y];
     pxn = imgCache[cxy.x-1][cxy.y];
     pyn = imgCache[cxy.x][cxy.y-1];
     pxp = imgCache[cxy.x+1][cxy.y];
     pyp = imgCache[cxy.x][cxy.y+1];
-#ifndef DBG_STATIC
-    float damp = bathyCache[cxy.x][cxy.y] / 3;
-    p.y = clamp(p.y + g * (pxn.x - pxp.x) * ubo.dt / ubo.dx, -damp, damp);
-    p.z = clamp(p.z + g * (pyn.x - pyp.x) * ubo.dt / ubo.dx, -damp, damp);
+    if (p.w < f0) {
+        p.y = p.z = 0;
+		if (pxn.x - p.x < f0 || pxn.w < f0) pxn.x = p.x;
+		if (pyn.x - p.x < f0 || pyn.w < f0) pyn.x = p.x;
+		if (pxp.x - p.x < f0 || pxp.w < f0) pxp.x = p.x;
+		if (pyp.x - p.x < f0 || pyp.w < f0) pyp.x = p.x;
+    }
+    p.y = clamp(p.y + g * (pxn.x - pxp.x) * ubo.dt / ubo.dxd, -5, 5);
+    p.z = clamp(p.z + g * (pyn.x - pyp.x) * ubo.dt / ubo.dxd, -5, 5);
+    if (p.w < 0.005) p.x -= 100;
+    p.w = pw;
 #endif
-#endif
-    imageStore(normal, xy, vec4((pyn.x - pyp.x) / ubo.dx, (pxn.x - pxp.x) / ubo.dx, 0, 0));
     imageStore(imgOut, xy, p);
+    imageStore(normal, xy, vec4((pyn.x - pyp.x) / ubo.dxd, (pxn.x - pxp.x) / ubo.dxd, 0, 0));
 }

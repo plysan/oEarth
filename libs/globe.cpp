@@ -28,6 +28,8 @@ bool debug_dem = false;
 const std::string IMG_JPG = ".jpg";
 const std::string IMG_TIF = ".tif";
 
+TriNode level0Node = {true, 0, NULL, NULL, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {180.0, 0.0}, {-90.0, -180.0}, {-90.0, 180.0}};
+
 static std::map<std::string, ImageSource*> image_cache;
 static std::vector<TriNode*> texture_nodes;
 
@@ -145,7 +147,6 @@ bool testImageSource(int level, double latT, double lngL, std::string &file_name
 }
 
 float getNodeHeight(TriNode &node, glm::dvec2 &coord) {
-    static double earth_r_meter = 6371000.0;
     ImageSource *source = NULL;
     if (node.dem_source_1 != NULL && node.dem_source_1->tl_coord.y < coord.y) {
         source = node.dem_source_1;
@@ -156,12 +157,13 @@ float getNodeHeight(TriNode &node, glm::dvec2 &coord) {
         uint16_t x = (uint16_t)((coord.y - source->tl_coord.y) / source->span.y * (source->w - 1));
         uint16_t y = (uint16_t)((-coord.x + source->tl_coord.x) / source->span.x * (source->h - 1));
         float* data = (float*)source->data;
-        return data[source->w * y + x] / earth_r_meter;
+        return data[source->w * y + x];
     }
-    return -0.0001f;
+    return -waterDeepM;
 }
 
 void TetrahedraGlobe::upLevel(TriNode &node) {
+    node.child.clear();
     if (node.level > 18){
         return;
     }
@@ -221,22 +223,27 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
         mid_coord_1 = (node.coord_1 + node.coord_2) / 2.0;
         mid_coord_3 = (node.coord_3 + node.coord_1) / 2.0;
     }
-    glm::dvec3 mid_vert_1 = coord2DPos(mid_coord_1.x, mid_coord_1.y, getNodeHeight(node, mid_coord_1));
-    glm::dvec3 mid_vert_2 = coord2DPos(mid_coord_2.x, mid_coord_2.y, getNodeHeight(node, mid_coord_2));
-    glm::dvec3 mid_vert_3 = coord2DPos(mid_coord_3.x, mid_coord_3.y, getNodeHeight(node, mid_coord_3));
+    glm::vec3 bathy = glm::vec3(getNodeHeight(node, mid_coord_1), getNodeHeight(node, mid_coord_2), getNodeHeight(node, mid_coord_3));
+    glm::dvec3 mid_vert_1 = coord2DPos(mid_coord_1.x, mid_coord_1.y, bathy.x / earthRadiusM);
+    glm::dvec3 mid_vert_2 = coord2DPos(mid_coord_2.x, mid_coord_2.y, bathy.y / earthRadiusM);
+    glm::dvec3 mid_vert_3 = coord2DPos(mid_coord_3.x, mid_coord_3.y, bathy.z / earthRadiusM);
 
     node.child.push_back({node.is_pole ? true : false, node.level + 1, node.dem_source_0, node.dem_source_1,
             node.vert_1, mid_vert_1, mid_vert_3,
-            node.coord_1, mid_coord_1, mid_coord_3});
+            node.coord_1, mid_coord_1, mid_coord_3,
+            {node.bathy.x, bathy.x, bathy.z}});
     node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_1, node.vert_2, mid_vert_2,
-            mid_coord_1, node.coord_2, mid_coord_2});
+            mid_coord_1, node.coord_2, mid_coord_2,
+            {bathy.x, node.bathy.y, bathy.y}});
     node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_3, mid_vert_2, node.vert_3,
-            mid_coord_3, mid_coord_2, node.coord_3});
+            mid_coord_3, mid_coord_2, node.coord_3,
+            {bathy.z, bathy.y, node.bathy.z}});
     node.child.push_back({false, node.level + 1, node.dem_source_0, node.dem_source_1,
             mid_vert_2, mid_vert_3, mid_vert_1,
-            mid_coord_2, mid_coord_3, mid_coord_1});
+            mid_coord_2, mid_coord_3, mid_coord_1,
+            {bathy.y, bathy.z, bathy.x}});
     for (auto &child_node : node.child) {
         upLevel(child_node);
     }
@@ -436,102 +443,94 @@ void TetrahedraGlobe::genGlobe(glm::dvec3 camPos) {
     vertices.clear();
     camOffset = camPos;
     clock_t begin = clock();
-    TriNode root;
-    root.parent = NULL;
-
     // Based on vulkan coordinate system.
     // North pole at (0, -1, 0)
     // lat:0;lng:0 at (1, 0, 0)
-    std::vector<TriNode> nodes = {
-        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {90.0, -135.0}, {0.0, -180.0}, {0.0, -90.0}},
-        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}, {1.0, 0.0, 0.0},  {90.0, -45.0}, {0.0, -90.0}, {0.0, 0.0}},
-        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {90.0, 45.0}, {0.0, 0.0}, {0.0, 90.0}},
-        {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0},  {90.0, 135.0}, {0.0, 90.0}, {0.0, 180.0}},
-        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0},  {-90.0, -135.0}, {0.0, -90.0}, {0.0, -180.0}},
-        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, -1.0},   {-90.0, -45.0}, {0.0, 0.0}, {0.0, -90.0}},
-        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},    {-90.0, 45.0}, {0.0, 90.0}, {0.0, 0.0}},
-        {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {-90.0, 135.0}, {0.0, 180.0}, {0.0, 90.0}},
-    };
+    if (level0Node.child.size() == 0) {
+        level0Node.child.insert(level0Node.child.end(), {
+            {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0}, {90.0, -135.0}, {0.0, -180.0}, {0.0, -90.0},  {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, -1.0}, {1.0, 0.0, 0.0},  {90.0, -45.0}, {0.0, -90.0}, {0.0, 0.0},      {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {90.0, 45.0}, {0.0, 0.0}, {0.0, 90.0},        {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0},  {90.0, 135.0}, {0.0, 90.0}, {0.0, 180.0},     {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, -1.0}, {-1.0, 0.0, 0.0},  {-90.0, -135.0}, {0.0, -90.0}, {0.0, -180.0}, {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, -1.0},   {-90.0, -45.0}, {0.0, 0.0}, {0.0, -90.0},     {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0},    {-90.0, 45.0}, {0.0, 90.0}, {0.0, 0.0},       {0.0f, 0.0f, 0.0f}, &level0Node},
+            {true, 1, NULL, NULL, {0.0, 1.0, 0.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, 1.0},   {-90.0, 135.0}, {0.0, 180.0}, {0.0, 90.0},    {0.0f, 0.0f, 0.0f}, &level0Node},
+        });
+    }
     texture_nodes.clear();
-    for (auto &node : nodes) {
+    for (auto &node : level0Node.child) {
         upLevel(node);
     }
-    setTexLayout(nodes);
-    for (auto &node : nodes) {
+    setTexLayout(level0Node.child);
+    for (auto &node : level0Node.child) {
         fillSubTex(node);
     }
-    for (auto &node : nodes) {
+    for (auto &node : level0Node.child) {
         collect(node);
     }
     std::cout << "Execution time: " << (double)(clock() - begin)/CLOCKS_PER_SEC << "s, vertices: " << vertices.size() << '\n';
 }
 
-void fillBathymetry(glm::vec2 levelBl, int level, glm::vec2 dstBl, glm::vec2 dstTr, glm::vec2 dstUvBl, glm::vec2 dstUvTr, std::vector<float> &dstData, int dstDataSize) {
-    std::string srcDataStr;
-    glm::vec2 srcLevelBl = levelBl;
-    int srcLevel = level;
-    float levelSize;
-    while(srcLevel > 0 && !testImageSource(srcLevel, srcLevelBl.x + levelSize, srcLevelBl.y, srcDataStr, IMG_TIF)) {
-        srcLevel--;
-        levelSize = 90.0 / glm::pow(2, srcLevel - 1);
-        srcLevelBl = srcLevelBl - glm::fmod(srcLevelBl, levelSize);
-    }
-    if (srcLevel == 0) {
-        std::cout << "canot find bathy" <<'\n';
-        return;
-    }
-    ImageSource *srcImg = getImgSource(srcDataStr, NULL);
-    float *srcData = (float*)srcImg->data;
-    glm::ivec2 srcDataIdxSize = glm::ivec2(srcImg->h - 1, srcImg->w - 1);
-    glm::vec2 dstCoordSize = dstTr - dstBl;
-    glm::ivec2 dataIdxBl = (glm::ivec2)((dstUvBl - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
-    glm::ivec2 dataIdxTr = (glm::ivec2)((dstUvTr - dstBl) / dstCoordSize * (float)(dstDataSize - 1));
-    glm::ivec2 srcIdx = (glm::ivec2)((dstUvBl - srcLevelBl) / levelSize * (glm::vec2)srcDataIdxSize);
-    glm::vec2 srcIdxDel = (glm::dvec2)dstCoordSize / (dstDataSize - 1.0) / ((double)levelSize / (glm::dvec2)srcDataIdxSize);
-    glm::vec2 srcIdxCur = srcIdx;
-    for (int v = dataIdxBl.x; v <= dataIdxTr.x; v++) {
-        for (int u = dataIdxBl.y; u <= dataIdxTr.y; u++) {
-            glm::vec2 srcOf = glm::vec2(srcDataIdxSize.x - srcIdxCur.x, srcIdxCur.y);
-            glm::ivec2 srcOi = glm::ivec2((int)srcOf.x, (int)srcOf.y);
-            glm::vec2 srcPropo = srcOf - (glm::vec2)srcOi;
-            float srcVal = (
-                srcData[srcOi.x * srcImg->w + srcOi.y] * (2 - srcPropo.x - srcPropo.y)
-              + srcData[glm::min(srcDataIdxSize.x, srcOi.x + 1) * srcImg->w + srcOi.y] * srcPropo.x
-              + srcData[srcOi.x * srcImg->w + glm::min(srcDataIdxSize.y, srcOi.y + 1)] * srcPropo.y
-            ) / 2;
-            if (std::isnan(srcVal)) srcVal = 0.0f;
-            dstData[(v * dstDataSize + u) * 4] = glm::clamp(srcVal + waterDeepM, 0.0f, waterDeepM);
-            srcIdxCur.y += srcIdxDel.y;
-        }
-        srcIdxCur.x += srcIdxDel.x;
-        srcIdxCur.y = srcIdx.y;
+bool withinTriNode(glm::dvec2 coord, TriNode& node) {
+    bool isNorth = node.coord_1.x > node.coord_2.x;
+    if (!node.is_pole) {
+        return isNorth
+            && coord.x < node.coord_1.x && coord.x > node.coord_2.x
+            && coord.y > node.coord_2.y && coord.y < node.coord_3.y
+            && std::abs(coord.y - node.coord_1.y) + coord.x - node.coord_2.x < node.coord_1.x - node.coord_2.x
+        || !isNorth
+            && coord.x > node.coord_1.x && coord.x < node.coord_2.x
+            && coord.y < node.coord_2.y && coord.y > node.coord_3.y
+            && std::abs(coord.y - node.coord_1.y) + node.coord_2.x - coord.x < node.coord_2.x - node.coord_1.x;
+    } else {
+        return isNorth
+            && coord.x < node.coord_1.x && coord.x > node.coord_2.x
+            && coord.y > node.coord_2.y && coord.y < node.coord_3.y
+        || !isNorth
+            && coord.x > node.coord_1.x && coord.x < node.coord_2.x
+            && coord.y < node.coord_2.y && coord.y > node.coord_3.y;
     }
 }
 
-void fillBathymetry(glm::vec2 dstBl, glm::vec2 dstTr, std::vector<float> &dstData, int dstDataSize) {
-    glm::vec2 dstBlAbs = dstBl + glm::vec2(90.0f, 180.0f);
-    int level = glm::ceil(glm::log2(90.0 / (dstTr.y - dstBl.y)) + 1);
-    float levelSize = 90.0 / glm::pow(2, level - 1);
-    glm::vec2 levelBl = dstBlAbs - glm::fmod(dstBlAbs, levelSize) - glm::vec2(90.0f, 180.0f);
-    glm::vec2 levelTr = levelBl + glm::vec2(levelSize);
-    fillBathymetry(levelBl, level, dstBl, dstTr, dstBl, levelTr, dstData, dstDataSize);
-    bool spanLat = levelTr.x < dstTr.x;
-    bool spanLng = levelTr.y < dstTr.y;
-    if (spanLat) {
-        fillBathymetry(glm::vec2(levelBl.x + levelSize, levelBl.y), level, dstBl, dstTr, glm::vec2(levelTr.x, dstBl.y), glm::vec2(dstTr.x, levelTr.y), dstData, dstDataSize);
+float searchTriNode(glm::dvec2 coord, TriNode** lastNode) {
+    if (*lastNode == NULL) *lastNode = &level0Node;
+    TriNode *curNode = *lastNode;
+    if (withinTriNode(coord, *curNode)) {
+        while(curNode->child.size() > 0) {
+            for (auto &node : curNode->child) {
+                if (withinTriNode(coord, node)) {
+                    curNode = &node;
+                    break;
+                }
+            }
+        }
+        *lastNode = curNode;
+        double latPro = std::abs((coord.x - curNode->coord_2.x) / (curNode->coord_1.x - curNode->coord_2.x));
+        double lngPro = std::abs(((coord.y - curNode->coord_2.y) - (curNode->coord_1.y - curNode->coord_2.y) * latPro) / (curNode->coord_3.y - curNode->coord_2.y) / (1 - latPro));
+        return latPro * curNode->bathy.x + (1 - latPro) * (lngPro * curNode->bathy.z + (1 - lngPro) * curNode->bathy.y);
+    } else {
+        *lastNode = (*lastNode)->parent;
+        return searchTriNode(coord, lastNode);
     }
-    if (spanLng) {
-        fillBathymetry(glm::vec2(levelBl.x, levelBl.y + levelSize), level, dstBl, dstTr, glm::vec2(dstBl.x, levelTr.y), glm::vec2(levelTr.x, dstTr.y), dstData, dstDataSize);
-    }
-    if (spanLat && spanLng) {
-        fillBathymetry(levelTr, level, dstBl, dstTr, levelTr, dstTr, dstData, dstDataSize);
+}
+
+void fillBathymetry(glm::dvec2 dstBl, glm::dvec2 dstTr, float* dstData, int dstDataSize) {
+    TriNode* lastNode = NULL;
+    glm::dvec2 del = (dstTr - dstBl) / (double)(dstDataSize-1);
+    for (int i = 0; i < dstDataSize; i++) {
+        for (int j = 0; j < dstDataSize; j++) {
+            glm::dvec2 coord = dstBl + del * glm::dvec2(i, j);
+            float srcVal = searchTriNode(coord, &lastNode);
+            dstData[(i * dstDataSize + j) * 4] = srcVal + waterDeepM;
+        }
     }
     if (debug_dem) {
         printf("Bathymetry:\n");
         for (int j = dstDataSize-1; j >= 0; j-=80) {
             for (int k = 0; k < dstDataSize; k+=30) {
                 float h = dstData[(dstDataSize * j + k) * 4];
-                std::cout << (h == 1 ? '*' : h == 0 ? '_' : '.');
+                std::cout << (h > 0 ? '*' : '_');
             }
             printf("\n");
         }

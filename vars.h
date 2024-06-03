@@ -27,7 +27,7 @@ const int localSize = 16;
 const int waterRes = 1024;
 const float waterDeepM = 50;
 const int w_count = 1;
-const float w_amps[w_count] = {2.0};
+const float w_amps[w_count] = {1.0};
 const float w_dirs[w_count][2] = {{1, 4}};
 const float earthRadiusM = 6378000;
 

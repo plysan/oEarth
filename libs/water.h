@@ -19,7 +19,7 @@ struct WaterParam {
     float time;
     float scale;
     float dt;
-    float dx;
+    float dxd;
     glm::mat4 d1;
     glm::mat4 d2;
     glm::mat4 d3;
@@ -43,6 +43,15 @@ struct WaterGrid {
     VkDeviceMemory normalImgMem;
     VkImageView normalImgView;
     VkSampler normalSampler;
+    void stageBathymetry(glm::dvec3 cameraPos);
+    void updateBathymetry(VkQueue graphicsQueue, VkCommandPool commandPool);
+    glm::dvec2 bathyRadius;
+    glm::dvec2 bathyPos;
+    glm::dvec2 bathyRadiusStaging;
+    glm::dvec2 bathyPosStaging;
+    void* bathyData = NULL;
+    VkBuffer bathyStagingImg;
+    VkDeviceMemory bathyStagingImgMem;
     VkImage bathymetryImg;
     VkDeviceMemory bathymetryImgMem;
     VkImageView bathymetryImgView;
@@ -52,7 +61,6 @@ struct WaterGrid {
     VkBuffer uBuf = NULL;
     VkDeviceMemory uBufMem = NULL;
     void* uBufData = NULL;
-    glm::dvec2 bathyRadius;
 
     std::vector<Vertex> vertices;
     std::vector<int> indices;
