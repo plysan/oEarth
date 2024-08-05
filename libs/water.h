@@ -25,26 +25,52 @@ struct WaterParam {
     glm::mat4 d3;
 };
 
+struct Particle
+{
+    glm::vec3 pos;
+    float mass;
+    glm::vec3 vel;
+    float dens;
+    //float pres;
+};
+
 struct WaterGrid {
-    VkPipelineLayout pipLayout;
-    VkDescriptorSetLayout descSetLayout;
-    VkPipeline pip;
-    std::vector<VkDescriptorSet> descSets;
+    void init(VkQueue queue, VkCommandPool commandPool, glm::dvec3 cameraPos);
+    void initRender(int width, int height, VkRenderPass renderPass, VkExtent2D swapChainExtent, VkDescriptorSetLayout gDsl);
+    void cleanupRender();
+    void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
     VkDescriptorPool descPool;
+
+    VkPipelineLayout plDebug;
+    VkPipeline pipDebug;
+
+    void initBoundaryPip();
+    VkPipelineLayout plBoundary;
+    VkDescriptorSetLayout dslBoundary;
+    VkPipeline pipBoundary;
+    std::vector<VkDescriptorSet> dsBoundary;
+    std::vector<VkBuffer> ptclBuf;
+    std::vector<VkDeviceMemory> ptclBufMem;
+    std::vector<void*> ptclBufData;
+    VkBuffer ptclMap;
+    VkDeviceMemory ptclMapMem;
+
+    void initWaterPip();
     void createImgs(VkQueue queue, VkCommandPool commandPool, glm::dvec3 cameraPos);
+    VkPipelineLayout plWater;
+    VkDescriptorSetLayout dslWater;
+    VkPipeline pipWater;
+    std::vector<VkDescriptorSet> dsWater;
     std::vector<VkImage> compImgs;
     std::vector<VkDeviceMemory> compImgMems;
     std::vector<VkImageView> compImgViews;
     std::vector<VkSampler> compImgSamplers;
-    uint32_t compImgCount = 2;
-    uint32_t compImgSets = 2;
-    uint32_t compImgStages = 2;
     VkImage normalImg;
     VkDeviceMemory normalImgMem;
     VkImageView normalImgView;
     VkSampler normalSampler;
     void stageBathymetry(glm::dvec3 cameraPos);
-    void updateBathymetry(VkQueue graphicsQueue, VkCommandPool commandPool);
+    void updateBathymetry(VkQueue graphicsQueue, VkCommandPool commandPool, VkCommandBuffer cmdBuf);
     glm::dvec2 bathyRadius;
     glm::dvec2 bathyPos;
     glm::dvec2 bathyRadiusStaging;
@@ -56,18 +82,18 @@ struct WaterGrid {
     VkDeviceMemory bathymetryImgMem;
     VkImageView bathymetryImgView;
     VkSampler bathymetrySampler;
-    int bathyRes = 2048;
-    std::vector<WaterParam> waterParam;
-    VkBuffer uBuf = NULL;
-    VkDeviceMemory uBufMem = NULL;
-    void* uBufData = NULL;
+    uint bathyRes = 2048;
+    WaterParam waterParam;
+    std::vector<VkBuffer> uBuf;
+    std::vector<VkDeviceMemory> uBufMem;
+    std::vector<void*> uBufData;
 
     std::vector<Vertex> vertices;
     std::vector<int> indices;
-    void init();
     void genWaterGrid(int x, int y);
-    void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
-    glm::dvec2 updateWOffset(glm::dvec2 worldCoord, double &waterRadius, glm::vec2 &bathyUvMid, double cos_lat, int count);
+    void updateWOffset(glm::dvec2 worldCoord, double &waterRadius, FrameParam &fParamWater, double cos_lat, int count, int pingpongIdx);
+
+    void cleanup();
 };
 
 #endif // WATER_H

@@ -6,9 +6,11 @@ LDFLAGS = -lglfw -ltiff -lvulkan -ldl -lpthread
 UNAME := $(shell uname)
 ifeq ($(UNAME), Linux)
 LDFLAGS += -lX11 -lXxf86vm -lXrandr -lXi
+else
+LDFLAGS += -Wl,-rpath,${VULKAN_LIB}
 endif
 
-SHADER := $(filter-out %.spv,$(wildcard shaders/shader.*))
+SHADER := $(filter-out %.spv %.h,$(wildcard shaders/*))
 SPV := $(patsubst %,%.spv,$(SHADER))
 SRC := $(wildcard *.cpp) $(wildcard libs/*.cpp) $(wildcard utils/*.cpp)
 OBJ := $(patsubst %.cpp,%.o,$(SRC))

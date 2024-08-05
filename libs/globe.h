@@ -34,6 +34,7 @@ class TetrahedraGlobe {
 public:
     std::vector<Vertex> vertices;
     ImageSource mega_texture;
+    glm::dvec3 _camOffset;
     glm::dvec3 camOffset;
     void genGlobe(glm::dvec3 camPos);
 };

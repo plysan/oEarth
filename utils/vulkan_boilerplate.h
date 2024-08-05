@@ -8,23 +8,21 @@ extern VkPhysicalDevice phyDevice;
 extern VkDeviceSize ubAlign;
 extern VkDevice logicalDevice;
 
-void createInitialImage(int width, int height, int depth, VkFormat format, void *data, VkImage &image, VkDeviceMemory& imageMemory,
-        VkQueue graphicsQueue, VkCommandPool commandPool);
+void createInitialImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageUsageFlags usage, VkImageLayout layout, VkImageTiling tiling,
+        VkMemoryPropertyFlags memProps, VkImage &image, VkDeviceMemory& imageMemory, VkQueue queue, VkCommandPool commandPool, void *src_data);
 
 void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
 
-void createImage(uint32_t width, uint32_t height, uint32_t depth, VkFormat format, VkImageLayout imageLayout, VkImageTiling tiling, VkImageUsageFlags usage,
-        VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
+void pipBarrier(VkCommandBuffer &cmdBuf, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+        VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask,
+        VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage);
 
-void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout,
-        VkQueue graphicsQueue, VkCommandPool commandPool, VkCommandBuffer cmdBuf, bool r2w);
-
-void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t depth,
+void copyBufferToImage(VkCommandBuffer cmdBuf, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t depth,
         VkQueue graphicsQueue, VkCommandPool commandPool);
 
-VkCommandBuffer beginSingleTimeCommands(VkCommandPool commandPool);
+VkCommandBuffer beginCmdBuf(VkCommandPool commandPool);
 
-void endSingleTimeCommands(VkQueue graphicsQueue, VkCommandBuffer commandBuffer, VkCommandPool commandPool);
+void endCmdBuf(VkQueue graphicsQueue, VkCommandPool cmdPool, VkCommandBuffer commandBuffer, bool cleanup);
 
 void createInstance(VkInstance &instance, const std::vector<const char*> requiredValidationLayers, bool enableValidationLayers);
 
@@ -45,6 +43,8 @@ void createSwapChain(VkSwapchainKHR &swapChain, std::vector<VkImage> &swapChainI
 
 VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, int dimension);
 
+VkFormat findDepthFormat();
+
 void createRenderPass(VkRenderPass &renderPass, VkFormat swapChainImageFormat);
 
 void createDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout,
@@ -53,16 +53,14 @@ void createDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout,
 std::vector<char> readFile(const std::string& filename);
 VkShaderModule createShaderModule(const std::vector<char>& code);
 
-void createGraphicsPipeline(VkPipelineLayout &pipelineLayout, VkPipeline &graphicsPipeline,
-        VkDescriptorSetLayout &descSetLayout, VkRenderPass renderPass, VkExtent2D swapChainExtent, int vertInStride,
-        std::vector<int> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat);
+void createGraphicsPipeline(VkPipelineLayout &pipelineLayout, VkPipeline &graphicsPipeline, VkDescriptorSetLayout &descSetLayout,
+        VkRenderPass renderPass, VkExtent2D swapChainExtent,
+        VkPrimitiveTopology topology, const char* shaderName,
+        uint32_t vertInStride, std::vector<uint32_t> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat);
 
 void createComputePipeline(VkPipelineLayout &pipelineLayout, VkPipeline &computePipeline, VkDescriptorSetLayout descSetLayout);
 
 void createCommandPool(VkCommandPool &commandPool, int phyDevGraphFamilyIdx);
-
-void createDepthResources(VkExtent2D swapChainExtent,
-        VkImage &depthImage, VkDeviceMemory &depthImageMemory, VkImageView &depthImageView);
 
 void createFramebuffers(VkRenderPass renderPass, std::vector<VkFramebuffer> &swapChainFramebuffers,
         std::vector<VkImageView> swapChainImageViews, VkImageView depthImageView, VkExtent2D swapChainExtent);

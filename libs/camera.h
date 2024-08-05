@@ -1,7 +1,6 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
-#include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
 #include "../vars.h"
@@ -15,9 +14,9 @@ struct Camera {
     float aspect;
     float fov;
     void getPVInv(float &height_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dvec3 offset);
+    void update(GLFWwindow* window, glm::dvec2 winCenter);
 };
 
-void updateCamera(Camera &camera, GLFWwindow *window);
 void initInvParam();
 
 #endif //CAMERA_H

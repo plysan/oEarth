@@ -1,0 +1,593 @@
+#version 450
+#extension GL_EXT_debug_printf : enable
+#extension GL_KHR_shader_subgroup_basic: enable
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+//#extension GL_EXT_shader_16bit_storage: enable
+//#extension GL_EXT_shader_8bit_storage: enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int8: enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int16: enable
+#extension GL_EXT_shader_subgroup_extended_types_int8: enable
+#extension GL_EXT_shader_subgroup_extended_types_int16: enable
+#extension GL_EXT_shared_memory_block: enable
+
+#include "water.h"
+
+const uint subGroupSizeS2 = subGroupSize * subGroupSize;
+const uint cacheSide = subGroupSize+4;
+const uint ptclMapLwgSize = ptclMapRadixSize + 1;
+const uint radixScale = subGroupSize / radixRectSize;
+const uint ptclSpacing = 2;
+const uint ptclSpacingSquare = ptclSpacing * ptclSpacing;
+const float dryThres = 0.002;
+const float ptclSink = 0.1;
+float dx = ubo.dxd / 2;
+float supportRadius = ubo.dxd / 2;
+float supportVol = 4 / 3 * pi * pow(supportRadius, 3);
+float meanDens = 5 / supportVol;
+
+layout(local_size_x = subGroupSize, local_size_y = subGroupSize) in;
+layout(binding = 1, rgba16f) uniform image2D normal;
+layout(binding = 2) uniform sampler2D bathymetry;
+layout(std430, binding = 3) buffer ptclIn  {
+    DrawParam drawParamIn;
+    uint gIdxIn[lwgCount];
+    uint ptclCntIn[lwgCount];
+    LwgMap lwgMapIn[lwgCount];
+    Particle particleIn[];
+};
+layout(std430, binding = 4) buffer ptclOut {
+    DrawParam drawParamOut;
+    uint gIdxOut[lwgCount];
+    uint ptclCntOut[lwgCount];
+    LwgMap lwgMapOut[lwgCount];
+    Particle particleOut[];
+};
+// x:height y:grid-x z:grid-y
+layout(binding = 5, rgba32f) uniform image2D imgIn;
+layout(binding = 6, rgba32f) uniform image2D imgOut;
+
+const uint neiBoundLength = radixRectSize * 4 + 4; //TODO <= subGroupSize
+shared X {
+    vec4 imgCache[cacheSide][cacheSide];
+    Particle ptcls[maxLwgParticles];
+    uint8_t st[stMaxSize];
+    uint16_t st2[st2MaxSize];
+    uint16_t radixSLoc[radixRange + neiBoundLength];
+    uint8_t radixSize[radixRange + neiBoundLength];
+    uint startOld;
+    uint endOld;
+    uint startNew;
+    uint endNew;
+    uint newPtclCnt;
+    uint incomingPtclCnt;
+    uint sortedPtclCnt;
+};
+
+int zIdxComp(float val, int offs) {
+    int value = int(val);
+    return (value & 1) << offs | (value & 2) << (offs+1);
+}
+
+uint zIndex(vec2 coord) {
+    if (coord.x < 0 || coord.y < 0 || coord.x > radixRectSize || coord.y > radixRectSize) return 0;
+    return uint(zIdxComp(coord.x, 0) | zIdxComp(coord.y, 1));
+}
+
+/*
+4|3 4 4 4|3
+-----------
+1|2 2 2 1|2
+1|3     1|3
+1|3     1|3
+4|3 4 4 4|3
+-----------
+1|2 2 2 1|2
+y axis is inverted due to lwgIdx
+*/
+// index for radixSLoc & radixSize
+const uint8_t neighborMap[36] = uint8_t[]( //TODO 2d array index incorrect
+    int8_t(radixRange + 16), uint8_t(radixRange + 0),  uint8_t(radixRange + 1),  uint8_t(radixRange + 2), uint8_t(radixRange + 3), uint8_t(radixRange + 17),
+    uint8_t(radixRange + 15), uint8_t(0),               uint8_t(1),               uint8_t(4),              uint8_t(5),              uint8_t(radixRange + 4),
+    uint8_t(radixRange + 14), uint8_t(2),               uint8_t(3),               uint8_t(6),              uint8_t(7),              uint8_t(radixRange + 5),
+    uint8_t(radixRange + 13), uint8_t(8),               uint8_t(9),               uint8_t(12),             uint8_t(13),             uint8_t(radixRange + 6),
+    uint8_t(radixRange + 12), uint8_t(10),              uint8_t(11),              uint8_t(14),             uint8_t(15),             uint8_t(radixRange + 7),
+    uint8_t(radixRange + 19), uint8_t(radixRange + 11), uint8_t(radixRange + 10), uint8_t(radixRange + 9), uint8_t(radixRange + 8), uint8_t(radixRange + 18)
+);
+
+// lwg offset x, y, corresponding boundaryIdx
+// start from lt, clockwise, corners last
+const int8_t neiBoundLocMap[3][neiBoundLength] = int8_t[][](
+    int8_t[](int8_t(0),  int8_t(0),  int8_t(0),  int8_t(0),  int8_t(1),  int8_t(1),  int8_t(1),  int8_t(1),
+             int8_t(0),  int8_t(0),  int8_t(0),  int8_t(0),  int8_t(-1), int8_t(-1), int8_t(-1), int8_t(-1),
+             int8_t(-1), int8_t(1), int8_t(1), int8_t(-1)),
+    int8_t[](int8_t(-1), int8_t(-1), int8_t(-1), int8_t(-1), int8_t(0),  int8_t(0),  int8_t(0),  int8_t(0),
+             int8_t(1),  int8_t(1),  int8_t(1),  int8_t(1),  int8_t(0),  int8_t(0),  int8_t(0),  int8_t(0),
+             int8_t(-1), int8_t(-1), int8_t(1), int8_t(1)),
+    int8_t[](int8_t(8),  int8_t(9),  int8_t(10), int8_t(11), int8_t(5),  int8_t(6),  int8_t(7),  int8_t(8),
+             int8_t(2),  int8_t(3),  int8_t(4),  int8_t(5),  int8_t(11), int8_t(0),  int8_t(1),  int8_t(2),
+             int8_t(11), int8_t(8), int8_t(5), int8_t(2))
+);
+
+// boundaryIdx's corresponding array index
+const uint8_t boundZIdxMap[ptclMapRadixSize] = uint8_t[](
+    uint8_t(13), uint8_t(7), uint8_t(5), uint8_t(4), uint8_t(1), uint8_t(0), uint8_t(2), uint8_t(8), uint8_t(10), uint8_t(11), uint8_t(14), uint8_t(15)
+);
+
+const int8_t nei9[2][9] = int8_t[][](
+    int8_t[](int8_t(-1), int8_t(0),  int8_t(1),  int8_t(-1), int8_t(0), int8_t(1), int8_t(-1), int8_t(0), int8_t(1)),
+    int8_t[](int8_t(-1), int8_t(-1), int8_t(-1), int8_t(0),  int8_t(0), int8_t(0), int8_t(1),  int8_t(1), int8_t(1))
+);
+
+const uint lwgCountN1 = lwgCount - 1;
+
+uint sortedIdx(uint stIdx) {
+    return uint(st[stIdx]) + uint(st2[stIdx / gl_SubgroupSize]);
+}
+
+void radixSort(uint lwgIdx, uvec2 lwgRadixOffset) {
+    bool sgEnd = gl_SubgroupInvocationID == subGroupSizeN1;
+    uint idx, zIdx, c;
+    uint8_t lc, lc2;
+    uint16_t lc3;
+    uint stSize = radixRange * subGroupsPerSphLane;
+    uint st2Size = stSize / subGroupSize;
+    uint st3Size = max(1, st2Size / subGroupSize);
+    Particle ptcl;
+    vec2 p;
+    idx = startOld + lIdx;
+    if (idx < endOld) {
+        ptcl = particleIn[idx];
+        ptcl.pos.xy -= ubo.iOffset * dx;
+        p = (ptcl.pos.xy / dx - lwgRadixOffset) / radixScale;
+    } else p = vec2(0.0);
+    lc = p.x < 1 && p.y < 1 && p.x > 0 && p.y > 0 ? uint8_t(1) : uint8_t(0);
+    lc2 = subgroupExclusiveAdd(lc);
+    if (sgEnd) st[gl_SubgroupID] = lc + lc2;
+    zIdx = zIndex(p);
+    for (c = 1; c < radixRange; c++) {
+        lc = zIdx == c ? uint8_t(1) : uint8_t(0);
+        lc2 = subgroupExclusiveAdd(lc);
+        if (sgEnd) {
+            st[c * subGroupsPerSphLane + gl_SubgroupID] = lc + lc2;
+        }
+    }
+    memoryBarrierShared();
+    barrier();
+    if (lIdx < stSize) {
+        lc = st[lIdx];
+        st[lIdx] = subgroupExclusiveAdd(lc);
+        if (sgEnd) st2[lIdx / gl_SubgroupSize] = uint16_t(st[lIdx] + lc);
+    }
+    memoryBarrierShared();
+    barrier();
+    if (lIdx < st2Size) st2[lIdx] = subgroupExclusiveAdd(st2[lIdx]);
+    memoryBarrierShared();
+    barrier();
+    uint hasPtcl = p.x < 1 && p.y < 1 && p.x > 0 && p.y > 0 ? uint8_t(1) : uint8_t(0);
+    if (hasPtcl > 0) {
+        idx = sortedIdx(gl_SubgroupID) + subgroupExclusiveAdd(hasPtcl);
+        ptcls[idx] = ptcl;
+    }
+    for (c = 1; c < radixRange; c++) {
+        hasPtcl = zIdx == c ? 1 : 0;
+        uint stIdx = c * subGroupsPerSphLane + gl_SubgroupID;
+        idx = subgroupExclusiveAdd(hasPtcl) + sortedIdx(stIdx);
+        if (hasPtcl == 1) {
+            ptcls[idx] = ptcl;
+        }
+    }
+    if (lIdx < ptclMapRadixSize - 1) {
+        uint stIdx = boundZIdxMap[lIdx] * subGroupsPerSphLane;
+        uint tmp = sortedIdx(stIdx);
+        lwgMapOut[lwgIdx].boundaryIdx[lIdx] = startNew + tmp;
+        stIdx += subGroupsPerSphLane;
+        lwgMapOut[lwgIdx].boundarySize[lIdx] = sortedIdx(stIdx) - tmp;
+    }
+    if (lIdx < radixRange - 1) {
+        uint stIdx = lIdx * subGroupsPerSphLane;
+        uint tmp = sortedIdx(stIdx);
+        radixSLoc[lIdx] = uint16_t(tmp);
+        stIdx += subGroupsPerSphLane;
+        radixSize[lIdx] = uint8_t(sortedIdx(stIdx) - tmp);
+    }
+    memoryBarrierShared();
+    barrier();
+    if (lIdx == lwgCountN1) {
+        sortedPtclCnt = idx + hasPtcl;
+        uint stIdx = boundZIdxMap[ptclMapRadixSize - 1] * subGroupsPerSphLane;
+        uint tmp = sortedIdx(stIdx);
+        lwgMapOut[lwgIdx].boundaryIdx[ptclMapRadixSize - 1] = startNew + tmp;
+        lwgMapOut[lwgIdx].boundarySize[ptclMapRadixSize - 1] = sortedPtclCnt - tmp;
+        tmp = sortedIdx((radixRange - 1) * subGroupsPerSphLane);
+        radixSLoc[radixRange - 1] = uint16_t(tmp);
+        radixSize[radixRange - 1] = uint8_t(sortedPtclCnt - tmp);
+    }
+}
+
+vec2 updateHeight(ivec2 cxy, inout vec4 p, inout vec2 buf) {
+    p = imgCache[cxy.x][cxy.y];
+    vec4 pxp = imgCache[cxy.x+1][cxy.y];
+    vec4 pxn = imgCache[cxy.x-1][cxy.y];
+    vec4 pyp = imgCache[cxy.x][cxy.y+1];
+    vec4 pyn = imgCache[cxy.x][cxy.y-1];
+    float del = min(p.w, (pxp.w * pxp.y - pxn.w * pxn.y + pyp.w * pyp.z - pyn.w * pyn.z) * ubo.dt / ubo.dxd);
+    float delSwe;
+    if (del < 0) {
+        delSwe = max(-0.45 * ubo.dt * p.w, del);
+    } else {
+        delSwe = del;
+    }
+    buf.y = max(buf.y - g * ubo.dt, -delSwe / ubo.dt);
+    p.x -= delSwe;
+    imgCache[cxy.x][cxy.y] = p;
+    return vec2(del, delSwe);
+}
+
+void main() {
+    ivec2 xy = ivec2(gl_WorkGroupID.xy * subGroupSize + gl_LocalInvocationID.xy);
+    ivec2 lxy = ivec2(gl_LocalInvocationID.xy);
+    ivec2 cxy = ivec2(lxy + ivec2(2));
+    vec4 p, pxn, pyn, pxp, pyp;
+    float bathy, pw;
+    vec2 delH, buf;
+    float dxArea = ubo.dxd * ubo.dxd / 4;
+    uint lwgIdx = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (lIdx == 0) {
+        startOld = gIdxOut[lwgIdx];
+        endOld = startOld + ptclCntOut[lwgIdx];
+        startNew = gIdxIn[lwgIdx];
+        endNew = startNew + ptclCntIn[lwgIdx];
+    }
+
+    if (ubo.scale != 1.0) {
+        memoryBarrierShared();
+        barrier();
+        if (lIdx < maxPadding) particleOut[startNew + lIdx].pos.xy = vec2(0.0);
+        if (lIdx == lwgCountN1) ptclCntOut[lwgIdx] = maxPadding;
+        if (lIdx < ptclMapRadixSize - 1) lwgMapOut[lwgIdx].boundarySize[lIdx] = 0;
+        ivec2 coordScaled = ivec2((xy - waterResHalf) * ubo.scale + waterResHalf);
+        vec4 n;
+        if (coordScaled.x < waterRes-1 && coordScaled.x > 0 && coordScaled.y < waterRes-1 && coordScaled.y > 0) {
+            p = imageLoad(imgIn, coordScaled);
+            n = imageLoad(normal, coordScaled);
+        } else {
+            vec2 dir_v = vec2(1, 0), dir_u = vec2(0, 1); // default west
+            if (xy.x == waterRes-1 && xy.y > 0) {dir_v = vec2(-1, 0); dir_u = vec2(0, -1);}
+            if (xy.x < waterRes-1 && xy.y == waterRes-1) {dir_v = vec2(0, -1); dir_u = vec2(1, 0);}
+            if (xy.x > 0 && xy.y == 0) {dir_v = vec2(0, 1); dir_u = vec2(-1, 0);}
+            bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x;
+            p = waveGen(false, bathy, xy, dir_v, dir_u);
+            n = vec4(0.0);
+        }
+        imageStore(imgOut, xy, p);
+        imageStore(normal, xy, n);
+        return;
+    }
+
+    float ptclDragInSwe = 5 * ubo.dt;
+    bool genPtcl = xy % ptclSpacing == ivec2(0);
+#ifdef DBG_STATIC
+    p = imageLoad(imgIn, xy + ubo.iOffset);
+    pxn = imageLoad(imgIn, (xy + ivec2(-1, 0)) + ubo.iOffset);
+    pxp = imageLoad(imgIn, (xy + ivec2(1, 0)) + ubo.iOffset);
+    pyn = imageLoad(imgIn, (xy + ivec2(0, -1)) + ubo.iOffset);
+    pyp = imageLoad(imgIn, (xy + ivec2(0, 1)) + ubo.iOffset);
+#endif
+#ifdef DBG_BATHY
+    p.x = texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x - waterDeepM;
+    pxn.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(-1, 0)) * ubo.bathyUvDel).x - waterDeepM;
+    pxp.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(1, 0)) * ubo.bathyUvDel).x - waterDeepM;
+    pyn.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(0, -1)) * ubo.bathyUvDel).x - waterDeepM;
+    pyp.x = texture(bathymetry, ubo.bathyUvBl + (xy + ivec2(0, 1)) * ubo.bathyUvDel).x - waterDeepM;
+#endif
+#if !defined(DBG_STATIC) && !defined(DBG_BATHY)
+    if (lxy.y < 8) {
+        ivec2 srcCoord, dstCoord;
+        if (lxy.y < 2) {
+            srcCoord = ivec2(xy.x, xy.y - 2);
+            dstCoord = ivec2(cxy.x, lxy.y);
+        } else if (lxy.y < 4) {
+            srcCoord = ivec2(xy.x, xy.y-2+subGroupSize);
+            dstCoord = ivec2(cxy.x, lxy.y+subGroupSize);
+        } else if (lxy.y < 6) {
+            srcCoord = ivec2(xy.x-lxy.x-2+(lxy.y-4), xy.y-lxy.y+lxy.x);
+            dstCoord = ivec2(lxy.y-4, cxy.x);
+        } else {
+            srcCoord = ivec2(xy.x-lxy.x+(lxy.y-6)+subGroupSize, xy.y-lxy.y+lxy.x);
+            dstCoord = ivec2(lxy.y+subGroupSize-4, cxy.x);
+        }
+        bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + srcCoord * ubo.bathyUvDel).x;
+        p = imageLoad(imgIn, srcCoord + ubo.iOffset);
+        p.x = max(p.x, -bathy);
+        p.w = p.x + bathy;
+        if (p.w < f0) p.y = p.z = 0;
+        imgCache[dstCoord.x][dstCoord.y] = p;
+    }
+    if ((lxy.x == 0 || lxy.x == subGroupSize - 1) && (lxy.y == 0 || lxy.y == subGroupSize - 1)) {
+        ivec2 lOffset = ivec2(lxy.x == 0 ? -1 : 1, lxy.y == 0 ? -1 : 1);
+        bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + (xy + lOffset) * ubo.bathyUvDel).x;
+        p = imageLoad(imgIn, xy + ubo.iOffset + lOffset);
+        p.x = max(p.x, -bathy);
+        p.w = p.x + bathy;
+        if (p.w < f0) p.y = p.z = 0;
+        imgCache[cxy.x + lOffset.x][cxy.y + lOffset.y] = p;
+    }
+    bathy = waterDeepM - texture(bathymetry, ubo.bathyUvBl + xy * ubo.bathyUvDel).x;
+    p = imageLoad(imgIn, xy + ubo.iOffset);
+    pw = p.w;
+    p.x = max(p.x, -bathy);
+    p.w = p.x + bathy;
+    if (p.w < f0) p.y = p.z = 0;
+    imgCache[cxy.x][cxy.y] = p;
+    memoryBarrierShared();
+    barrier();
+
+    buf = imageLoad(normal, xy + ubo.iOffset).zw; //TODO follow velocity
+    if (ubo.dt > f0 && (xy.x > 0 || xy.x < waterRes-1 || xy.y > 0 || xy.y < waterRes-1)) {
+        if (lxy.y == 0) {
+            updateHeight(ivec2(cxy.x, 1), p, buf);
+        } else if (lxy.y == 1) {
+            updateHeight(ivec2(cxy.x, subGroupSize + 2), p, buf);
+        } else if (lxy.y == 2) {
+            updateHeight(ivec2(1, cxy.x), p, buf);
+        } else if (lxy.y == 3) {
+            updateHeight(ivec2(subGroupSize + 2, cxy.x), p, buf);
+        }
+        delH = updateHeight(cxy, p, buf);
+        buf.x -= (delH.x - delH.y) * dxArea;
+        memoryBarrierShared();
+        barrier();
+        pxn = imgCache[cxy.x-1][cxy.y];
+        pyn = imgCache[cxy.x][cxy.y-1];
+        pxp = imgCache[cxy.x+1][cxy.y];
+        pyp = imgCache[cxy.x][cxy.y+1];
+        vec2 advect = (p.yz * p.w * 4 + pxn.yz * pxn.w + pyn.yz * pyn.w + pxp.yz * pxp.w + pyp.yz * pyp.w) / (p.w * 4 + pxn.w + pyn.w + pxp.w + pyp.w);
+        p.w = p.x + bathy;
+        if (p.w < dryThres) {
+            p.y = p.z = 0;
+        }
+        p.yz = p.yz + g * (vec2(pxn.x - pxp.x, pyn.x - pyp.x) * ubo.dt / ubo.dxd);
+        imgCache[cxy.x][cxy.y] = p;
+        memoryBarrierShared();
+        barrier();
+        ivec2 br, tl, tr;
+        if (advect.x > 0) {tl.x = 0; br.x = tr.x = -1;}
+        else         {tl.x = 0;  br.x = tr.x = 1;}
+        if (advect.y > 0) {br.y = 0; tl.y = tr.y = -1;}
+        else         {br.y = 0;  tl.y = tr.y = 1;}
+        pxp = imgCache[cxy.x + tr.x][cxy.y + tr.y];
+        vec4 ptl = imgCache[cxy.x + tl.x][cxy.y + tl.y];
+        pyp = imgCache[cxy.x + br.x][cxy.y + br.y];
+        vec2 pp = clamp(abs(advect) * ubo.dt / dx, 0, 0.9);
+        p = mix(mix(p, pyp, pp.x), mix(ptl, pxp, pp.x), pp.y);
+        p.x = p.w - bathy;
+    } else {
+        delH.x = delH.y = 0;
+        pxn = imgCache[cxy.x-1][cxy.y];
+        pyn = imgCache[cxy.x][cxy.y-1];
+    }
+
+    Particle pa;
+    uvec2 lwgRadixOffset = gl_WorkGroupID.xy * subGroupSize;
+    radixSort(lwgIdx, lwgRadixOffset);
+    memoryBarrierShared();
+    barrier();
+    // neighbor boundary map to shared men
+    uint boundIndexIdx;
+    if (lIdx < neiBoundLength) {
+        boundIndexIdx = neiBoundLocMap[2][lIdx];
+        uint8_t locSize;
+        ivec2 neiLwgCoord = ivec2(gl_WorkGroupID.xy) + ivec2(neiBoundLocMap[0][lIdx], neiBoundLocMap[1][lIdx]);
+        if (neiLwgCoord.x < 0 || neiLwgCoord.x > gl_NumWorkGroups.x - 1 || neiLwgCoord.y < 0 || neiLwgCoord.y > gl_NumWorkGroups.y - 1) {
+            locSize = uint8_t(0);
+        } else {
+            uint neiLwgIdx = neiLwgCoord.y * gl_NumWorkGroups.x + neiLwgCoord.x;
+            locSize = uint8_t(lwgMapIn[neiLwgIdx].boundarySize[boundIndexIdx]);
+        }
+        uint16_t locIdx = subgroupExclusiveAdd(locSize);
+        radixSLoc[radixRange + lIdx] = locIdx;
+        radixSize[radixRange + lIdx] = locSize;
+    }
+    memoryBarrierShared();
+    barrier();
+    // neighbor boundary particle to shared mem
+    uint lwgBoundSize = radixSize[radixRange + gl_SubgroupID];
+    uint hasPtcl = 0, lc = 0;
+    if (gl_SubgroupID < neiBoundLength) {
+        if (gl_SubgroupInvocationID < lwgBoundSize) {
+            boundIndexIdx = neiBoundLocMap[2][gl_SubgroupID];
+            ivec2 neiLwgCoord = ivec2(gl_WorkGroupID.xy) + ivec2(neiBoundLocMap[0][gl_SubgroupID], neiBoundLocMap[1][gl_SubgroupID]);
+            uint neiLwgIdx = neiLwgCoord.y * gl_NumWorkGroups.x + neiLwgCoord.x;
+            pa = particleIn[lwgMapIn[neiLwgIdx].boundaryIdx[boundIndexIdx] + gl_SubgroupInvocationID];
+            pa.pos.xy -= ubo.iOffset * dx;
+            vec2 lwgPos = pa.pos.xy / dx - lwgRadixOffset;
+            hasPtcl = lwgPos.x > 0 && lwgPos.x < subGroupSize && lwgPos.y > 0 && lwgPos.y < subGroupSize ? 1 : 0;
+            lc = subgroupExclusiveAdd(hasPtcl);
+            if (gl_SubgroupInvocationID == lwgBoundSize - 1) st2[gl_SubgroupID] = uint16_t(lc) + uint16_t(hasPtcl);
+        } else {
+            pa = Particle(vec3(0.0), 0.0, vec3(0.0), 0.0);
+        }
+        if (gl_SubgroupInvocationID == 0 && lwgBoundSize == 0) st2[gl_SubgroupID] = uint16_t(0);
+    }
+    memoryBarrierShared();
+    barrier();
+    if (gl_SubgroupID == 0 && gl_SubgroupInvocationID < neiBoundLength) st2[gl_SubgroupInvocationID] = subgroupExclusiveAdd(st2[gl_SubgroupInvocationID]);
+    memoryBarrierShared();
+    barrier();
+    if (gl_SubgroupID == neiBoundLength - 1 && gl_SubgroupInvocationID == max(0, int(lwgBoundSize) - 1)) incomingPtclCnt = uint(st2[neiBoundLength - 1]) + lc;
+    memoryBarrierShared();
+    barrier();
+    if (gl_SubgroupID < neiBoundLength) {
+        if (gl_SubgroupInvocationID < lwgBoundSize && hasPtcl > 0) {
+            // for sort neighbor particles
+            ptcls[min(sortedPtclCnt + uint(st2[gl_SubgroupID]) + lc, maxLwgParticles - neiBoundLength)] = pa;
+        }
+        // for access neighbor lwg particles
+        float massSum = subgroupAdd(pa.mass);
+        if (massSum > 0) {
+            pa.pos = subgroupAdd(pa.mass * pa.pos) / massSum;
+            pa.vel = subgroupAdd(pa.mass * pa.vel) / massSum;
+            pa.mass = massSum;
+            pa.dens = pa.mass / supportVol;
+        }
+        if (gl_SubgroupInvocationID == 0) {
+            ptcls[maxLwgParticles - 1 - gl_SubgroupID] = pa;
+            radixSLoc[radixRange + gl_SubgroupID] = uint16_t(maxLwgParticles - 1 - gl_SubgroupID);
+            radixSize[radixRange + gl_SubgroupID] = massSum > 0 ? uint8_t(1) : uint8_t(0);
+            //if (lwgIdx == 633) debugPrintfEXT("bound loc: %d, size: %d @ %d", uint(radixSLoc[radixRange + gl_SubgroupID]), uint(radixSize[radixRange + gl_SubgroupID]), radixRange + gl_SubgroupID);
+        }
+    }
+    memoryBarrierShared();
+    barrier();
+    // add particle gen by swe
+    bool boundLwg = gl_WorkGroupID.x == 0 || gl_WorkGroupID.y == 0 || gl_WorkGroupID.x == gl_NumWorkGroups.x - 1 || gl_WorkGroupID.y == gl_NumWorkGroups.y - 1;
+    bool breaking = ubo.dt > f0 && buf.x > 2 * dxArea && p.w > 0 && buf.y + delH.y / ubo.dt > 0;
+    hasPtcl = !boundLwg && breaking && genPtcl ? 1 : 0;
+    //hasPtcl = xy == ivec2(510, 510) ? 1 : 0; //TEST
+    lc = subgroupExclusiveAdd(hasPtcl);
+    if (lIdx % subGroupSize == subGroupSizeN1) st2[gl_SubgroupID] = uint16_t(lc) + uint16_t(hasPtcl);
+    memoryBarrierShared();
+    barrier();
+    if (lIdx < gl_NumSubgroups) st2[lIdx] = subgroupExclusiveAdd(st2[lIdx]);
+    memoryBarrierShared();
+    barrier();
+    uint count = incomingPtclCnt + uint(st2[gl_SubgroupID]) + lc;
+    if (hasPtcl > 0) {
+        //pa = Particle(vec3(ubo.dxd * 255.5, ubo.dxd * 255.5, 0.000013 * earthRadiusM) + vec3(mod(ubo.time, 10) * 0.1), mod(ubo.time, 2), vec3(0), 0); //TEST
+        pa.vel = vec3(p.yz * 1.05, buf.y * 1.1);
+        pa.pos = vec3(xy * dx, p.x);
+        pa.mass = buf.x * ptclSpacingSquare;
+        buf.x = buf.y = 0;
+        ptcls[min(sortedPtclCnt + count, maxLwgParticles - neiBoundLength)] = pa;
+    } else {
+        if (breaking) buf.x = buf.y = 0;
+        else if (ubo.dt > f0 && buf.x > 0 && p.w > 0) {
+            float massBack = min(buf.x, 0.5 * dxArea * ubo.dt);
+            buf.x -= massBack;
+            p.xw += massBack / dxArea;
+        }
+    }
+    if (lIdx == lwgCountN1) {
+        newPtclCnt = count + hasPtcl;
+        ptclCntOut[lwgIdx] = min(sortedPtclCnt + newPtclCnt + maxPadding, maxLwgParticles - neiBoundLength);
+    }
+    imgCache[cxy.x][cxy.y] = p;
+    memoryBarrierShared();
+    barrier();
+    // write particles from shared mem to storage buffer
+    vec4 pp, ppI;
+    ivec2 pxy;
+    hasPtcl = 0;
+    bool ppUdate = false;
+    vec3 velDel = vec3(0);
+    if (lIdx < min(endNew - startNew, maxLwgParticles - neiBoundLength)) {
+        pa = lIdx < sortedPtclCnt + newPtclCnt ? ptcls[lIdx] : Particle(vec3(0.0), 0.0, vec3(0.0), 0.0);
+        pp.xy = pa.pos.xy / dx - lwgRadixOffset;
+        hasPtcl = pa.mass > 0.1 && pp.x > 0 && pp.y > 0 && pp.x < subGroupSize && pp.y < subGroupSize ? 1 : 0;
+        if (hasPtcl > 0) {
+            pxy = ivec2(pp.xy);
+            vec2 prop = pp.xy - pxy;
+            pxy += ivec2(2);
+            pp = imgCache[pxy.x][pxy.y];
+            if (ubo.dt > f0) {
+                // particle <-> swe & bathy
+                pxp = imgCache[pxy.x + 1][pxy.y];
+                pyp = imgCache[pxy.x][pxy.y + 1];
+                ppI = prop.y * pyp + (1 - prop.y) * pp;
+                ppI = prop.x * pxp + (1 - prop.x) * ppI;
+                vec3 refH = vec3(max(pp.x - pp.w, pp.x - ptclSink), max(pxp.x - pxp.w, pxp.x - ptclSink), max(pyp.x - pyp.w, pyp.x - ptclSink));
+                float refHI = max(ppI.x - ppI.w, ppI.x - ptclSink);
+                float ppVertV = (2 * pp.w * pp.y - pxp.w * pxp.y - pyp.w * pyp.y) * ubo.dt / dx;
+                if (ppI.w <= 0) ppI.y = ppI.z = 0;
+                if (pa.pos.z < refHI) {
+                    vec3 reflNorm = normalize(vec3(refH.x - refH.y, refH.x - refH.z, dx));
+                    vec3 relVel = p.w > 0 ? vec3(ppI.yz, ppVertV) : vec3(0);
+                    pa.vel -= relVel;
+                    float dotSclr = dot(reflNorm, pa.vel);
+                    if (dotSclr < 0) {
+                        vec3 refComp = reflNorm * dotSclr;
+                        vec3 tanComp = pa.vel - refComp;
+                        pa.vel = 0 * refComp + (clamp(ppI.w, 0, ptclSink) / ptclSink * 0.05 + 0.95) * tanComp;
+                        pa.pos.z = refHI + 0.01;
+                    }
+                    pa.vel += relVel;
+                } else if (pa.pos.z < ppI.x && ppI.w > 0) {
+                    vec2 equV = (pa.vel.xy * pa.mass + ppI.yz * ppI.w * dxArea) / (pa.mass + ppI.w * dxArea);
+                    float mvLoss = pa.mass * min(1, length(pa.vel.xy - equV) * ubo.dt * 40);
+                    pa.vel.xy += mvLoss / pa.mass * normalize(ppI.yz - pa.vel.xy);
+                    pa.vel.z = 0.95 * pa.vel.z + 0.05 * ppVertV;
+                    pp.yz += mvLoss / (ppI.w * dxArea) * normalize(pa.vel.xy - ppI.yz);
+                    float massBack = max(min(ubo.dt * 0.5, pa.mass), pa.mass * 0.5 * ubo.dt);
+                    pp.xw += massBack / dxArea;
+                    pa.mass -= massBack;
+                    ppUdate = true;
+                }
+                // particle <-> particle
+                if (lIdx < sortedPtclCnt && pa.mass > 0) {
+                    uvec2 ptclRadixCoordOrg = uvec2(clamp((pa.pos.xy / dx - lwgRadixOffset) / radixScale, 0, radixRectSize - 1));
+                    uvec2 ptclRadixCoord = uvec2(1) + uvec2(clamp((pa.pos.xy / dx - lwgRadixOffset) / radixScale, 0, radixRectSize - 1));
+                    uvec2 ptclRadixCoordCur;
+                    uint ptclScanStart, ptclScanEnd;
+                    float dist;
+                    float densTarget = pa.pos.z < ppI.x && ppI.w > 0 ? meanDens : 0;
+                    for (uint c = 0; c < 10; c++) {
+                        ptclRadixCoordCur = ptclRadixCoord + uvec2(nei9[0][c], nei9[1][c]);
+                        ptclScanStart = radixSLoc[neighborMap[ptclRadixCoordCur.y * 6 + ptclRadixCoordCur.x]];
+                        ptclScanEnd = ptclScanStart + radixSize[neighborMap[ptclRadixCoordCur.y * 6 + ptclRadixCoordCur.x]];
+                        for (uint i = ptclScanStart; i < ptclScanEnd; i++) {
+                            dist = distance(pa.pos, ptcls[i].pos);
+                            if (dist < supportRadius) densTarget += ptcls[i].mass * 15 / (pi * pow(supportRadius, 6)) * pow(supportRadius - dist, 3);
+                        }
+                    }
+                    ptcls[lIdx].dens = pa.dens = densTarget;
+                    memoryBarrierShared();
+                    barrier();
+                    for (uint c = 0; c < 10; c++) {
+                        ptclRadixCoordCur = ptclRadixCoord + uvec2(nei9[0][c], nei9[1][c]);
+                        ptclScanStart = radixSLoc[neighborMap[ptclRadixCoordCur.y * 6 + ptclRadixCoordCur.x]];
+                        ptclScanEnd = ptclScanStart + radixSize[neighborMap[ptclRadixCoordCur.y * 6 + ptclRadixCoordCur.x]];
+                        for (uint i = ptclScanStart; i < ptclScanEnd; i++) {
+                            dist = distance(pa.pos, ptcls[i].pos);
+                            if (i != lIdx && dist > f0 && dist < supportRadius && ptcls[i].dens > f0) {
+                                vec3 deldel = 0.01 * 15 / (pi * pow(supportRadius, 6)) * 3 * pow(supportRadius - dist, 2)
+                                    * ubo.dt * ptcls[i].mass * ((pa.dens + ptcls[i].dens) / 2 - meanDens) / (ptcls[i].dens * pa.mass)
+                                    * normalize(pa.pos - ptcls[i].pos);
+                                vec3 deldel2 = 0.01 * 15 / (2 * pi * pow(supportRadius, 3)) * (-pow(dist, 3) / (2 * pow(supportRadius, 3)) + pow(dist, 2) / pow(supportRadius, 2) + supportRadius / (2 * dist) - 1)
+                                    * ubo.dt * ptcls[i].mass / (ptcls[i].dens * pa.mass) * (ptcls[i].vel - pa.vel);
+                                if (any(isnan(deldel)) || any(isinf(deldel)) || length(deldel) > 100) debugPrintfEXT("%v6f", deldel, deldel2);
+                                velDel += deldel + deldel2;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            pa.pos = vec3(0.0, 0.0, -100);
+            pa.mass = 0;
+        }
+    }
+    memoryBarrierShared();
+    barrier();
+    if (lIdx < min(endNew - startNew, maxLwgParticles - neiBoundLength)) {
+        if (hasPtcl > 0) {
+            if (ppUdate) imgCache[pxy.x][pxy.y] = pp;
+            pa.vel += velDel - vec3(0, 0, g * ubo.dt);
+            pa.pos += pa.vel * ubo.dt;
+        }
+        particleOut[startNew + lIdx] = pa;
+    }
+    //if (abs(int(gl_WorkGroupID.x) - int(gl_NumWorkGroups.x / 2)) < 1 && abs(int(gl_WorkGroupID.y) - int(gl_NumWorkGroups.y / 2)) < 1
+    //        && (startNew + sortedPtclCnt + newPtclCnt > endNew) && lIdx == 0)
+    //    debugPrintfEXT("Overflow %d -> %d (%d, %d, %d) in lwg: %d", endNew - startNew, sortedPtclCnt + newPtclCnt, sortedPtclCnt, incomingPtclCnt, newPtclCnt - incomingPtclCnt, lwgIdx); 
+    memoryBarrierShared();
+    barrier();
+    p.xw = imgCache[cxy.x][cxy.y].xw;
+    p.x = p.w < dryThres ? p.x - 100 : p.x;
+    p.w = pw;
+    imgCache[cxy.x][cxy.y].xw = p.xw;
+    imageStore(imgOut, xy, imgCache[cxy.x][cxy.y]);
+#else
+    imageStore(imgOut, xy, p);
+#endif
+    imageStore(normal, xy, vec4((pxn.x - p.x) / dx, (pyn.x - p.x) / dx, buf));
+}

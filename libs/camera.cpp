@@ -16,81 +16,34 @@
 
 
 static const float FOV_MIN = 20.0f;
-static const float FOV_RANGE = 100.0f;
 
-glm::vec3 getCoveredViewFromAbove(Camera &camera) {
-    glm::vec3 pos_above = camera.pos * 1.01;
-    glm::vec3 earth_center_n = -glm::normalize(camera.pos);
-    glm::vec3 camera_dor_n = glm::normalize(camera.dir);
-    return pos_above;
-}
-
-void rotateCamera(Camera &camera, GLFWwindow *window) {
-    static auto lastTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float timeDelta = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - lastTime).count();
-    lastTime = currentTime;
-
-    camera.pos = glm::rotate(camera.pos, -timeDelta * glm::radians(1.0), glm::dvec3(0.0, 0.0, 1.0));
-    camera.dir = glm::normalize(glm::vec3(0.0f, 0.0f, 0.0f) - lvec3(camera.pos));
-    camera.up = glm::vec3(0.0f, 0.0f, 1.0f);
-    camera.proj = glm::perspective(glm::radians(camera.fov), camera.aspect, 0.1f, 10.0f);
-    camera.proj[1][1] *= -1;
-}
-
-void freeCamera(Camera &camera, GLFWwindow *window) {
-    static bool cursorDidabled = false;
-    if (!cursorDidabled) {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        cursorDidabled = true;
-    }
-    static auto lastTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float timeDelta = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - lastTime).count();
-    lastTime = currentTime;
-
+void Camera::update(GLFWwindow* window, glm::dvec2 winCenter) {
+    up = glm::normalize(lvec3(pos));
     double xpos, ypos;
-    int windowW, windowH;
-    glfwGetWindowSize(window, &windowW, &windowH);
     glfwGetCursorPos(window, &xpos, &ypos);
-    static float rotateFactor = 0.01f;
-    static float aceleration = 0.00003f;
-    float dx = (windowW/2 - xpos) * rotateFactor, dy = (windowH/2 - ypos) * rotateFactor;
-    glm::vec3 up = glm::normalize(lvec3(camera.pos));
-    camera.dir = glm::rotate(camera.dir, dx, up);
-    glm::vec3 tmpAxis = glm::cross(camera.dir, up);
-    camera.dir = glm::normalize(glm::rotate(camera.dir, dy, tmpAxis));
-    glm::vec3 right = glm::cross(camera.dir, up);
-    float vlctDelta = aceleration * timeDelta;
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS){
-        camera.vlct += camera.dir * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS){
-        camera.vlct -= camera.dir * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS){
-        camera.vlct += right * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS){
-        camera.vlct -= right * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS){
-        camera.vlct += up * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS){
-        camera.vlct -= up * vlctDelta;
-    }
-    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS){
-        camera.vlct = glm::vec3(0.0f);
-    }
+    glm::vec2 rDir = glm::vec2(winCenter.x - xpos, winCenter.y - ypos) * 0.01f;
+    dir = glm::rotate(dir, rDir.x, up);
+    glm::vec3 tmpAxis = glm::cross(dir, up);
+    glfwSetCursorPos(window, winCenter.x, winCenter.y);
+    dir = glm::normalize(glm::rotate(dir, rDir.y, tmpAxis));
+    float height = glm::length(pos) - earthRadius;
+    proj = glm::perspective(glm::radians(fov), aspect, glm::max(0.0000001f, height / 1000), 1.5f);
+    proj[1][1] *= -1;
 
-    camera.pos = camera.pos + hvec3(camera.vlct * timeDelta);
-    camera.up = glm::normalize(camera.pos);
-    float height = glm::length(camera.pos) - earthRadius;
-    camera.proj = glm::perspective(glm::radians(camera.fov), camera.aspect, glm::max(0.000001f, height / 100), 2.0f);
-    camera.proj[1][1] *= -1;
-
-    glfwSetCursorPos(window, windowW/2, windowH/2);
+    glm::vec3 right = glm::cross(dir, up);
+    static float vlctDelta = 0.0000001f;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) vlct += dir * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) vlct -= dir * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) vlct += right * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) vlct -= right * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) vlct += up * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) vlct -= up * vlctDelta;
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) vlct = glm::vec3(0.0f);
+    static auto lastTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float timeDelta = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - lastTime).count();
+    lastTime = currentTime;
+    pos = pos + hvec3(vlct * timeDelta);
 }
 
 double getDirLenFromPos(double height, double cos_down_dir) {
@@ -149,7 +102,7 @@ struct InvParam {
 static InvParam inv_map[RES_H][RES_RAD][RES_FOV];
 
 float getInvDeltaH(float h) {
-    return glm::max(0.00001f, h);
+    return glm::max(0.00000f, h);
 }
 
 InvParam getInvParam(float height, float rad_down_dir, float fov) {
@@ -233,6 +186,3 @@ void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dve
     v_inv = glm::inverse(glm::lookAt(pos_cam_inv, pos_cam_inv + dir_inv, up));
 }
 
-void updateCamera(Camera &camera, GLFWwindow *window) {
-    freeCamera(camera, window);
-}

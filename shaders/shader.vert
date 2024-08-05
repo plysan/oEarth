@@ -2,8 +2,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_EXT_debug_printf : enable
 
-#include "../vars.h"
-#include "common.h"
+#include "graph.h"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -21,23 +20,8 @@ layout(location = 9) out vec3 cam_param;
 layout(location = 10) out vec2 waterOffsetCoord;
 layout(location = 11) out float bathy;
 
-layout(std140, binding = 0) uniform UniformBufferObject {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
-    mat4 p_inv;
-    mat4 v_inv;
-    vec3 word_offset; // from earth center
-    int target;
-    vec2 freqCoord;
-    vec2 waterOffset;
-    vec2 bathyUvMid;
-    vec2 bathyRadius;
-    float waterRadius;
-    float height;
-    float time;
-} ubo;
-
+layout(binding = 3) uniform sampler2D compImg;
+layout(binding = 4) uniform sampler2D compNorImg;
 layout(binding = 5) uniform sampler2D bathymetry;
 
 float atmosphere_radius_square = atmosphereTopRadius * atmosphereTopRadius;
@@ -75,7 +59,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
     vec3 cam_earthCenter_dir = normalize(-ubo.word_offset - cam_inv);
     float cos_b = dot(cam_earthCenter_dir, cam_vertex_dir);
     if (cos_b < 0) {
-        gl_Position = ubo.proj * ubo.view * ubo.model * vec4(cam_earthCenter_dir, 1);
+        gl_Position = ubo.proj * ubo.view * vec4(cam_earthCenter_dir, 1);
         return;
     }
     float sin_b = sqrt(1 - pow(cos_b, 2));
@@ -93,7 +77,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
         cam_vertex_length = (earthRadius + ubo.height) * cos_b + earthRadius * cos_a;
     }
     vec3 surface_pos_ms = cam_inv + cam_vertex_dir * cam_vertex_length;
-    vertex_pos_cs = (ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz;
+    vertex_pos_cs = (ubo.view * vec4(surface_pos_ms, 1)).xyz;
 
     cam_earthCenter_dir = (ubo.view * vec4(cam_earthCenter_dir, 0)).xyz;
     lng_n_cs = normalize(cross((ubo.view * vec4(0, -1, 0, 0)).xyz, -cam_earthCenter_dir));
@@ -127,7 +111,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
         compH = waveHGen(fragTexCoord);
     }
     float water_height = compH * meterToRad;
-    gl_Position = ubo.proj * vec4(((ubo.view * ubo.model * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
+    gl_Position = ubo.proj * vec4(((ubo.view * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
 }
 
 void main() {

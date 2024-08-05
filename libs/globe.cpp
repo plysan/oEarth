@@ -168,7 +168,7 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
         return;
     }
     glm::dvec3 center_pos = (node.vert_1 + node.vert_2 + node.vert_3) / 3.0;
-    float cam_dist = glm::distance(center_pos, camOffset);
+    float cam_dist = glm::distance(center_pos, _camOffset);
     float triangle_size = glm::length(node.vert_1 - center_pos);
     if (node.level > 2 && cam_dist/triangle_size > 30.0f) {
         return;
@@ -252,9 +252,9 @@ void TetrahedraGlobe::upLevel(TriNode &node) {
 void TetrahedraGlobe::collect(TriNode& node) {
     if (node.child.empty()) {
         glm::vec3 normal = glm::normalize(glm::cross(node.vert_2 - node.vert_1, node.vert_3 - node.vert_1));
-        vertices.push_back({lvec3(node.vert_1 - camOffset), normal, node.tex_1});
-        vertices.push_back({lvec3(node.vert_2 - camOffset), normal, node.tex_2});
-        vertices.push_back({lvec3(node.vert_3 - camOffset), normal, node.tex_3});
+        vertices.push_back({lvec3(node.vert_1 - _camOffset), normal, node.tex_1});
+        vertices.push_back({lvec3(node.vert_2 - _camOffset), normal, node.tex_2});
+        vertices.push_back({lvec3(node.vert_3 - _camOffset), normal, node.tex_3});
         return;
     } else {
         for (auto &child_node : node.child) {
@@ -441,7 +441,7 @@ void TetrahedraGlobe::setTexLayout(std::vector<TriNode> &nodes) {
 
 void TetrahedraGlobe::genGlobe(glm::dvec3 camPos) {
     vertices.clear();
-    camOffset = camPos;
+    _camOffset = camPos;
     clock_t begin = clock();
     // Based on vulkan coordinate system.
     // North pole at (0, -1, 0)

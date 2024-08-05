@@ -2,8 +2,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_EXT_debug_printf : enable
 
-#include "../vars.h"
-#include "common.h"
+#include "graph.h"
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) in vec4 scatter_rgba;
@@ -17,24 +16,10 @@ layout(location = 8) in float cam_vertex_length;
 layout(location = 9) in vec3 cam_param; // (dlat, dlng, pix_span)
 layout(location = 10) in vec2 waterOffsetCoord;
 layout(location = 11) in float bathy;
-layout(binding = 1) uniform sampler2D texSampler;
 
-layout(std140, binding = 0) uniform UniformBufferObject {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
-    mat4 p_inv;
-    mat4 v_inv;
-    vec3 word_offset;
-    int target;
-    vec2 freqCoord;
-    vec2 terrainOffset;
-    vec2 bathyUvMid;
-    vec2 bathyRadius;
-    float waterRadius;
-    float height;
-    float time;
-} ubo;
+layout(binding = 1) uniform sampler2D texSampler;
+layout(binding = 3) uniform sampler2D compImg;
+layout(binding = 4) uniform sampler2D compNorImg;
 
 layout(location = 0) out vec4 outColor;
 
@@ -63,13 +48,7 @@ vec2 waveNormGen(vec2 freqCoord) {
     return -vec2(n.y, n.x);
 }
 
-vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
-    vec4 compH = vec4(0);
-    if (waterOffsetCoord.x < 1 && waterOffsetCoord.x > 0 && waterOffsetCoord.y < 1 && waterOffsetCoord.y > 0) {
-        compH = texture(compNorImg, waterOffsetCoord);
-    } else {
-        compH.xy = waveNormGen(fragTexCoord);
-    }
+vec3 getViewRefl(vec4 compH, vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_sky, inout float ref_port_sun) {
     vec2 procH = vec2(0.0);
     vec3 surface_n_cs = normalize(world_offset_n_cs + (compH.x) * lat_n_cs + (compH.y) * lng_n_cs);
     float fresnel_sun = 0.02 + 0.98 * pow(1.0 - dot(sun_n_cs, surface_n_cs), 5.0); // Schlick's approximation
@@ -85,7 +64,7 @@ vec3 getViewRefl(vec2 delta, float h_coe, vec3 facet_n_cs, inout float fresnel_s
     return n_view_refl;
 }
 
-void sampleN(int n, float h_coe, vec3 facet_n_cs, inout vec4 scatter_rgba_refl, inout float fresnel_sky, inout float ref_port_sun) {
+void sampleN(vec4 compH, int n, float h_coe, vec3 facet_n_cs, inout vec4 scatter_rgba_refl, inout float fresnel_sky, inout float ref_port_sun) {
     float fresnel_sky_tmp;
     float ref_port_sun_tmp;
     fresnel_sky = 0;
@@ -94,7 +73,7 @@ void sampleN(int n, float h_coe, vec3 facet_n_cs, inout vec4 scatter_rgba_refl, 
     float delta = 1.0 / n;
     float idx = -0.5 + delta / 2;
     for (int i=0; i<n; i++) {
-        vec3 n_view_refl = getViewRefl(cam_param.xy * idx, h_coe, facet_n_cs, fresnel_sky_tmp, ref_port_sun_tmp);
+        vec3 n_view_refl = getViewRefl(compH, cam_param.xy * idx, h_coe, facet_n_cs, fresnel_sky_tmp, ref_port_sun_tmp);
         scatter_rgba_refl += texture4D(getScatterAngles(world_offset_n_cs, n_view_refl, sun_n_cs, 0)) / n;
         fresnel_sky += fresnel_sky_tmp / n;
         ref_port_sun += ref_port_sun_tmp / n;
@@ -106,6 +85,12 @@ void main() {
     if (ubo.target == TARGET_SKY) {
         outColor.rgb = scatter_rgba.rgb;
     } else if (ubo.target == TARGET_WATER) {
+        vec4 compH = vec4(0);
+        if (waterOffsetCoord.x < 1 && waterOffsetCoord.x > 0 && waterOffsetCoord.y < 1 && waterOffsetCoord.y > 0) {
+            compH = texture(compNorImg, waterOffsetCoord);
+        } else {
+            compH.xy = waveNormGen(fragTexCoord);
+        }
         vec3 facet_n_cs = normalize(-vertex_pos_n_cs + sun_n_cs);
         float wave_h = waveDomainSize * wave_h_domain;
         float wave_span = wave_h / cam_param.z;
@@ -119,19 +104,19 @@ void main() {
             if (wave_span < 2) {
                 if (wave_span < 1) {
                     if (wave_span < 0.5) {
-                        sampleN(4, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
+                        sampleN(compH, 4, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
                     } else {
-                        sampleN(3, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
+                        sampleN(compH, 3, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
                     }
                 } else {
-                    sampleN(2, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
+                    sampleN(compH, 2, h_coe, facet_n_cs, scatter_rgba_refl, fresnel_sky, ref_port_sun);
                 }
             } else {
-                vec3 n_view_refl = getViewRefl(cam_param.xy, h_coe, facet_n_cs, fresnel_sky, ref_port_sun);
+                vec3 n_view_refl = getViewRefl(compH, cam_param.xy, h_coe, facet_n_cs, fresnel_sky, ref_port_sun);
                 scatter_rgba_refl = texture4D(getScatterAngles(world_offset_n_cs, n_view_refl, sun_n_cs, 0));
             }
         } else {
-            vec3 n_view_refl = getViewRefl(cam_param.xy, 0, facet_n_cs, fresnel_sky, ref_port_sun);
+            vec3 n_view_refl = getViewRefl(compH, cam_param.xy, 0, facet_n_cs, fresnel_sky, ref_port_sun);
             scatter_rgba_refl = texture4D(getScatterAngles(world_offset_n_cs, n_view_refl, sun_n_cs, 0));
         }
 
@@ -140,6 +125,8 @@ void main() {
             + (1 - fresnel_sky) * water_refrac * scatter_rgba_refl.rgb
             + sun_color * scatter_rgba_refl.a * ref_port_sun
         );
+        float frac = clamp(compH.z / 3, 0, 1);
+        outColor.rgb = (1 - frac) * outColor.rgb + frac * vec3(frac);
     } else {
         outColor.rgb = scatter_rgba.rgb + (1 - scatter_rgba.a) * texture(texSampler, fragTexCoord).rgb * sun_proportion;
     }
