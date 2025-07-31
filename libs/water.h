@@ -41,8 +41,9 @@ struct WaterGrid {
     void recordCmd(VkCommandBuffer cmdBuf, int descSetNum);
     VkDescriptorPool descPool;
 
-    VkPipelineLayout plDebug;
-    VkPipeline pipDebug;
+    VkPipelineLayout plSph;
+    VkPipeline pipSph;
+    VkPipeline pipRender;
 
     void initBoundaryPip();
     VkPipelineLayout plBoundary;

@@ -5,10 +5,11 @@
 
 const int TARGET_TERRAIN = 0;
 const int TARGET_SKY = 1;
-const int TARGET_WATER = 2;
+const int TARGET_SWE = 2;
 const float FOV_RANGE = 100.0f;
 const uint WIDTH = 600;
 const uint HEIGHT = 250;
+const float zNear = 0.0000001f, zFar = 1.5f;
 
 const float earthRadius = 1.0f;
 const float atmosphereTopRadius = 1.011f;

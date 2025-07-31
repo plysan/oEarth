@@ -363,8 +363,6 @@ void main() {
         p.x = p.w - bathy;
     } else {
         delH.x = delH.y = 0;
-        pxn = imgCache[cxy.x-1][cxy.y];
-        pyn = imgCache[cxy.x][cxy.y-1];
     }
 
     Particle pa;
@@ -554,7 +552,7 @@ void main() {
                                     * normalize(pa.pos - ptcls[i].pos);
                                 vec3 deldel2 = 0.01 * 15 / (2 * pi * pow(supportRadius, 3)) * (-pow(dist, 3) / (2 * pow(supportRadius, 3)) + pow(dist, 2) / pow(supportRadius, 2) + supportRadius / (2 * dist) - 1)
                                     * ubo.dt * ptcls[i].mass / (ptcls[i].dens * pa.mass) * (ptcls[i].vel - pa.vel);
-                                if (any(isnan(deldel)) || any(isinf(deldel)) || length(deldel) > 100) debugPrintfEXT("%v6f", deldel, deldel2);
+                                //if (any(isnan(deldel)) || any(isinf(deldel)) || length(deldel) > 100) debugPrintfEXT("%v6f", deldel, deldel2);
                                 velDel += deldel + deldel2;
                             }
                         }
@@ -589,5 +587,5 @@ void main() {
 #else
     imageStore(imgOut, xy, p);
 #endif
-    imageStore(normal, xy, vec4((pxn.x - p.x) / dx, (pyn.x - p.x) / dx, buf));
+    imageStore(normal, xy, vec4(0, 0, buf));
 }

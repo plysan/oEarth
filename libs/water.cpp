@@ -153,21 +153,21 @@ void WaterGrid::init(VkQueue queue, VkCommandPool cmdPool, glm::dvec3 cameraPos)
     });
     initWaterPip();
     initBoundaryPip();
-    VkDescriptorBufferInfo uboInfo[2] = {
+    VkDescriptorBufferInfo uboInfo[] = {
         {uBuf[0], 0, sizeof(WaterParam)},
         {uBuf[1], 0, sizeof(WaterParam)},
     };
     VkDescriptorImageInfo normalInfo{normalSampler, normalImgView, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo bathymetryInfo{bathymetrySampler, bathymetryImgView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo gridInfos[2] = {
+    VkDescriptorImageInfo gridInfos[] = {
         {compImgSamplers[0], compImgViews[0], VK_IMAGE_LAYOUT_GENERAL},
         {compImgSamplers[1], compImgViews[1], VK_IMAGE_LAYOUT_GENERAL},
     };
-    VkDescriptorBufferInfo ptclBufInfo[2] = {
+    VkDescriptorBufferInfo ptclBufInfo[] = {
         {ptclBuf[0], 0, VK_WHOLE_SIZE},
         {ptclBuf[1], 0, VK_WHOLE_SIZE},
     };
-    VkWriteDescriptorSet waterWrite[14] = {
+    VkWriteDescriptorSet waterWrite[] = {
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsWater[0], 0, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, nullptr, &uboInfo[0], nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsWater[0], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &normalInfo, nullptr, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsWater[0], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bathymetryInfo, nullptr, nullptr},
@@ -184,7 +184,7 @@ void WaterGrid::init(VkQueue queue, VkCommandPool cmdPool, glm::dvec3 cameraPos)
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsWater[1], 6, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &gridInfos[0], nullptr, nullptr},
     };
     vkUpdateDescriptorSets(logicalDevice, sizeof(waterWrite) / sizeof(VkWriteDescriptorSet), waterWrite, 0, 0);
-    VkWriteDescriptorSet boundaryWrite[12] = {
+    VkWriteDescriptorSet boundaryWrite[] = {
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsBoundary[0], 0, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, nullptr, &uboInfo[0], nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsBoundary[0], 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &normalInfo, nullptr, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsBoundary[0], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bathymetryInfo, nullptr, nullptr},
@@ -202,13 +202,15 @@ void WaterGrid::init(VkQueue queue, VkCommandPool cmdPool, glm::dvec3 cameraPos)
 }
 
 void WaterGrid::initRender(int width, int height, VkRenderPass renderPass, VkExtent2D swapChainExtent, VkDescriptorSetLayout gDsl) {
-    createGraphicsPipeline(plDebug, pipDebug, gDsl, renderPass, swapChainExtent,
-        VK_PRIMITIVE_TOPOLOGY_POINT_LIST, "sph_debug", sizeof(Particle), {offsetof(Particle, pos), offsetof(Particle, vel)}, {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT});
+    createGraphicsPipeline(plSph, pipSph, gDsl, renderPass, swapChainExtent,
+        VK_PRIMITIVE_TOPOLOGY_POINT_LIST, "sph", sizeof(Particle), {offsetof(Particle, pos), offsetof(Particle, vel)}, {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT}, true);
+    createGraphicsPipeline(plSph, pipRender, gDsl, renderPass, swapChainExtent,
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, "water", 0, {}, {}, false);
 }
 
 void WaterGrid::cleanupRender() {
-    vkDestroyPipeline(logicalDevice, pipDebug, nullptr);
-    vkDestroyPipelineLayout(logicalDevice, plDebug, nullptr);
+    vkDestroyPipeline(logicalDevice, pipSph, nullptr);
+    vkDestroyPipelineLayout(logicalDevice, plSph, nullptr);
 }
 
 void WaterGrid::genWaterGrid(int x, int y) {

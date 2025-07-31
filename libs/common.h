@@ -31,6 +31,7 @@ struct FrameParam {
     glm::vec2 waterOffset;
     glm::vec2 bathyUvMid;
     glm::vec2 bathyRadius;
+    glm::vec2 fbRes;
     float waterRadius;
     float waterRadiusM;
     float height;
@@ -42,7 +43,6 @@ struct FrameParam {
     };
     glm::mat4 pad1;
     glm::mat3 pad2;
-    glm::vec2 pad3;
 };
 
 #endif // COMMON_H

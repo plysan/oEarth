@@ -118,6 +118,7 @@ private:
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
+    VkSampler depthImageSmapler;
     TetrahedraGlobe globe{};
     SkyDome skyDome;
     WaterGrid water_grid;
@@ -192,7 +193,7 @@ private:
         createDescriptorSetLayout(gDescSetLayout,
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-            {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_VERTEX_BIT});
+            {VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_ALL, VK_SHADER_STAGE_VERTEX_BIT});
         createCommandPool(cmdPool, phyDevGraphFamilyIdx);
         copyCmds = beginCmdBuf(cmdPool);
         water_grid.init(computeQueue, cmdPool, camera.pos);
@@ -201,7 +202,7 @@ private:
         scatterImageView = createImageView(scatterImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 3);
         createSampler(terrainSampler);
         createSampler(scatterSampler);
-        initRender(WIDTH, HEIGHT);
+        initRender();
         createSyncObjects();
         std::thread t1(&Main::updateStagingBufferStruct, this);
         t1.detach();
@@ -212,47 +213,77 @@ private:
     }
 
     void recreateSwapChain() {
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-        while (width == 0 || height == 0) {
-            glfwGetFramebufferSize(window, &width, &height);
+        /*
+        int widthPix = 0, heightPix = 0;
+        glfwGetFramebufferSize(window, &widthPix, &heightPix);
+        while (widthPix == 0 || heightPix == 0) {
+            glfwGetFramebufferSize(window, &widthPix, &heightPix);
             glfwWaitEvents();
         }
+        */
         vkDeviceWaitIdle(logicalDevice);
         water_grid.cleanupRender();
         cleanupRender();
-        initRender(width, height);
+        initRender();
     }
 
-    void initRender(int width, int height) {
+    void initRender() {
         createSwapChain(swapChain, swapChainImages, swapChainExtent, swapChainImageFormat,
                         window, surface, phyDevSurCaps, phyDevGraphFamilyIdx, phyDevPresentFamilyIdx);
         camera.aspect = swapChainExtent.width / (float) swapChainExtent.height;
         createImageViews();
-        createRenderPass(renderPass, swapChainImageFormat);
+        createRenderPass(renderPass, swapChainImageFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
         createGraphicsPipeline(gPipelineLayout, graphicsPipeline, gDescSetLayout, renderPass, swapChainExtent,
                 VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, "shader", sizeof(Vertex),
                 {offsetof(Vertex, pos),      offsetof(Vertex, normal),   offsetof(Vertex, texCoord)},
-                {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT});
+                {VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R32G32_SFLOAT}, true);
         createDepthResources(swapChainExtent, depthImage, depthImageMemory, depthImageView);
         createFramebuffers(renderPass, swapChainFramebuffers, swapChainImageViews, depthImageView, swapChainExtent);
         createUniformBuffers();
         uint32_t grahDsCount/*TODO*/ = swapChainImages.size() * pingPongCount;
         createDescriptorPool(descPool, grahDsCount, {
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, grahDsCount},
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, grahDsCount * 5/*terrain + scatter + comp + compNormal + bathy*/},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, grahDsCount * 5/*terrain + scatter + depth + comp + bathy*/},
         });
-        createDescriptorSets(descPool, grahDsCount, swapChainImages.size(), gDescSetLayout, renderDescSets,
-                uniformBuffers, sizeof(FrameParam), {terrainImageView, scatterImageView}, {terrainSampler, scatterSampler}, water_grid);
-        water_grid.initRender(width, height, renderPass, swapChainExtent, gDescSetLayout);
+
+        std::vector<VkDescriptorSetLayout> layouts(grahDsCount, gDescSetLayout);
+        VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr, descPool, grahDsCount, layouts.data()};
+        renderDescSets.resize(grahDsCount);
+        if (vkAllocateDescriptorSets(logicalDevice, &dsAlloc, renderDescSets.data()) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate graphic descriptor sets!");
+        for (int k = 0; k < pingPongCount; k++) {
+            for (size_t i = 0; i < swapChainImages.size(); i++) {
+                int descSetIdx = swapChainImages.size() * k + i;
+                VkDescriptorBufferInfo bufInf{uniformBuffers[i], 0, sizeof(FrameParam)};
+                VkDescriptorImageInfo imageInfos[] = {
+                    {terrainSampler, terrainImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {scatterSampler, scatterImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                    {depthImageSmapler, depthImageView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                    {water_grid.compImgSamplers[(k+1) % pingPongCount], water_grid.compImgViews[(k+1) % pingPongCount], VK_IMAGE_LAYOUT_GENERAL},
+                    {water_grid.bathymetrySampler, water_grid.bathymetryImgView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                };
+                VkWriteDescriptorSet dsWrites[] = {
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 0, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, nullptr, &bufInf, nullptr},
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[0], nullptr, nullptr},
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[1], nullptr, nullptr},
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 3, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[2], nullptr, nullptr},
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 4, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[3], nullptr, nullptr},
+                    {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, renderDescSets[descSetIdx], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[4], nullptr, nullptr},
+                };
+                vkUpdateDescriptorSets(logicalDevice, sizeof(dsWrites) / sizeof(VkWriteDescriptorSet), dsWrites, 0, nullptr);
+            }
+        }
+        water_grid.initRender(swapChainExtent.width, swapChainExtent.height, renderPass, swapChainExtent, gDescSetLayout);
         createCommandBuffers();
     }
 
     void createDepthResources(VkExtent2D swapChainExtent, VkImage &depthImage, VkDeviceMemory &depthImageMemory, VkImageView &depthImageView) {
         VkFormat depthFormat = findDepthFormat();
-        createInitialImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_TILING_OPTIMAL, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory, NULL, NULL, NULL);
+        createInitialImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_TILING_OPTIMAL, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory, graphicsQueue, cmdPool, NULL);
         depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 2);
+        createSampler(depthImageSmapler);
     }
 
     void displayFpsLinux() {
@@ -299,6 +330,7 @@ private:
         vkDestroyImageView(logicalDevice, depthImageView, nullptr);
         vkDestroyImage(logicalDevice, depthImage, nullptr);
         vkFreeMemory(logicalDevice, depthImageMemory, nullptr);
+        vkDestroySampler(logicalDevice, depthImageSmapler, nullptr);
         for (auto framebuffer : swapChainFramebuffers) {
             vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
         }
@@ -440,8 +472,7 @@ private:
 
     void createUniformBuffers() {
         //TODO
-        VkDeviceSize bufferSize = sizeof(FrameParam);
-        bufferSize = sizeof(FrameParam) * 3;
+        VkDeviceSize bufferSize = sizeof(fParams);
         uniformBuffers.resize(swapChainImages.size());
         uniformBuffersData.resize(swapChainImages.size());
         uniformBuffersMemory.resize(swapChainImages.size());
@@ -478,41 +509,68 @@ private:
                 // compute
                 water_grid.recordCmd(commandBuffers[cmdBufIdx], j);
                 // render
-                VkRenderPassBeginInfo renderPassInfo{};
-                renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-                renderPassInfo.renderPass = renderPass;
-                renderPassInfo.framebuffer = swapChainFramebuffers[i];
-                renderPassInfo.renderArea.offset = {0, 0};
-                renderPassInfo.renderArea.extent = swapChainExtent;
                 std::array<VkClearValue, 2> clearValues{};
                 clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
                 clearValues[1].depthStencil = {1.0f, 0};
-                renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-                renderPassInfo.pClearValues = clearValues.data();
+                VkRenderPassBeginInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr,
+                    renderPass, swapChainFramebuffers[i], {{0, 0}, swapChainExtent}, static_cast<uint32_t>(clearValues.size()), clearValues.data()};
+
                 vkCmdBeginRenderPass(commandBuffers[cmdBufIdx], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+                uint32_t dOffsetSwe = sizeof(FrameParam) * 2;
+                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dOffsetSwe);
+                bool debugSph = false;
+                if (!debugSph) {
+                    VkDeviceSize offsetsPtl[] = {sizeof(DrawParam) + sizeof(uint32_t) * lwgCount * 2 + sizeof(LwgMap) * lwgCount};
+                    vkCmdBindVertexBuffers(commandBuffers[cmdBufIdx], 0, 1, &water_grid.ptclBuf[j], offsetsPtl);
+                    vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, water_grid.pipSph);
+                    vkCmdDrawIndirect(commandBuffers[cmdBufIdx], water_grid.ptclBuf[j], 0, 1, 0);
+                }
                 vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
                 VkBuffer vertexBuffers[] = {vertexBuffer};
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(commandBuffers[cmdBufIdx], 0, 1, vertexBuffers, offsets);
                 vkCmdBindIndexBuffer(commandBuffers[cmdBufIdx], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                uint32_t dynamicOffset = 0;
-                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dynamicOffset);
-                VkDeviceSize waterOffset = offsetof(struct FrameParam, terrainParam);
-                vkCmdDrawIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], waterOffset, 1, 0);
-                dynamicOffset = sizeof(FrameParam);
-                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dynamicOffset);
-                VkDeviceSize skyOffset = dynamicOffset + offsetof(struct FrameParam, skyParam);
+                VkDeviceSize water_offset = dOffsetSwe + offsetof(struct FrameParam, water_param);
+                vkCmdDrawIndexedIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], water_offset, 1, 0);
+                vkCmdEndRenderPass(commandBuffers[cmdBufIdx]);
+
+                VkRenderPass renderPassReadDepth;
+                createRenderPass(renderPassReadDepth, swapChainImageFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_NONE,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                VkRenderPassBeginInfo renderPassWaterInf{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr,
+                    renderPassReadDepth, swapChainFramebuffers[i], {{0, 0}, swapChainExtent}, 0, nullptr};
+                vkCmdBeginRenderPass(commandBuffers[cmdBufIdx], &renderPassWaterInf, VK_SUBPASS_CONTENTS_INLINE);
+                vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, water_grid.pipRender);
+                vkCmdDraw(commandBuffers[cmdBufIdx], 3, 1, 0, 0);
+                vkCmdEndRenderPass(commandBuffers[cmdBufIdx]);
+
+                VkRenderPass renderPass2;
+                createRenderPass(renderPass2, swapChainImageFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                VkRenderPassBeginInfo renderPass2Info{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr,
+                    renderPass2, swapChainFramebuffers[i], {{0, 0}, swapChainExtent}, 0, nullptr};
+                vkCmdBeginRenderPass(commandBuffers[cmdBufIdx], &renderPass2Info, VK_SUBPASS_CONTENTS_INLINE);
+
+                if (debugSph) {
+                    VkDeviceSize offsetsPtl[] = {sizeof(DrawParam) + sizeof(uint32_t) * lwgCount * 2 + sizeof(LwgMap) * lwgCount};
+                    vkCmdBindVertexBuffers(commandBuffers[cmdBufIdx], 0, 1, &water_grid.ptclBuf[j], offsetsPtl);
+                    vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, water_grid.pipSph);
+                    vkCmdDrawIndirect(commandBuffers[cmdBufIdx], water_grid.ptclBuf[j], 0, 1, 0);
+                    vkCmdBindVertexBuffers(commandBuffers[cmdBufIdx], 0, 1, vertexBuffers, offsets);
+                }
+
+                uint32_t dOffsetTerrain = 0;
+                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dOffsetTerrain);
+                vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+                VkDeviceSize terrainOffset = offsetof(struct FrameParam, terrainParam);
+                vkCmdDrawIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], terrainOffset, 1, 0);
+
+                uint32_t dOffsetSky = sizeof(FrameParam);
+                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dOffsetSky);
+                VkDeviceSize skyOffset = dOffsetSky + offsetof(struct FrameParam, skyParam);
                 //TODO
                 vkCmdDrawIndexedIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], skyOffset, 1, 0);
-                dynamicOffset += sizeof(FrameParam);
-                vkCmdBindDescriptorSets(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, gPipelineLayout, 0, 1, &renderDescSets[cmdBufIdx], 1, &dynamicOffset);
-                VkDeviceSize water_offset = dynamicOffset + offsetof(struct FrameParam, water_param);
-                vkCmdDrawIndexedIndirect(commandBuffers[cmdBufIdx], uniformBuffers[i], water_offset, 1, 0);
-                //
-                offsets[0] = sizeof(DrawParam) + sizeof(uint32_t) * lwgCount * 2 + sizeof(LwgMap) * lwgCount;
-                vkCmdBindVertexBuffers(commandBuffers[cmdBufIdx], 0, 1, &water_grid.ptclBuf[j], offsets);
-                vkCmdBindPipeline(commandBuffers[cmdBufIdx], VK_PIPELINE_BIND_POINT_GRAPHICS, water_grid.pipDebug);
-                vkCmdDrawIndirect(commandBuffers[cmdBufIdx], water_grid.ptclBuf[j], 0, 1, 0);
+
                 vkCmdEndRenderPass(commandBuffers[cmdBufIdx]);
                 if (vkEndCommandBuffer(commandBuffers[cmdBufIdx]) != VK_SUCCESS) {
                     throw std::runtime_error("failed to record command buffer!");
@@ -586,22 +644,15 @@ private:
         updateUniformBuffer(imageIndex, pingpongIdx);
         clock_t stamp3 = clock();
 
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
-        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = waitSemaphores;
-        submitInfo.pWaitDstStageMask = waitStages;
-        submitInfo.commandBufferCount = 1;
+        VkSemaphoreSubmitInfo waitSemaphInf{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, imageAvailableSemaphores[currentFrame], 1, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0};
+        VkSemaphoreSubmitInfo signalSemaphInf{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, renderFinishedSemaphores[currentFrame], 2, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT_KHR, 0};
         int cmdBufOffset = (pingpongIdx) * swapChainImages.size();
-        submitInfo.pCommandBuffers = &commandBuffers[cmdBufOffset + imageIndex];
+        VkCommandBufferSubmitInfo cmdBufInf{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, commandBuffers[cmdBufOffset + imageIndex], 0};
+        VkSubmitInfo2 submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO_2, nullptr, 0, 1, &waitSemaphInf, 1, &cmdBufInf, 1, &signalSemaphInf};
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = signalSemaphores;
 
         vkResetFences(logicalDevice, 1, &inFlightFences[currentFrame]);
-        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
+        if (vkQueueSubmit2(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
             throw std::runtime_error("failed to submit draw command buffer!");
         }
 
@@ -663,7 +714,7 @@ private:
         fParams[1].skyParam.firstIndex = 0;
         fParams[1].skyParam.vertexOffset = sbs.terrainVertMax;
         fParams[1].skyParam.firstInstance = 0;
-        fParams[2].target = TARGET_WATER;
+        fParams[2].target = TARGET_SWE;
         fParams[2].model[0].z = glm::length(globe.camOffset) - earthRadius;;
         fParams[2].view = fParams[0].view;
         fParams[2].proj = camera.proj;
@@ -690,7 +741,8 @@ private:
         fParams[2].waterRadius = waterRadius;
         fParams[2].waterRadiusM = waterRadius * earthRadiusM;
         fParams[2].bathyRadius = glm::vec2(water_grid.bathyRadius.x, water_grid.bathyRadius.x);
-        memcpy(uniformBuffersData[currentImage], fParams, sizeof(FrameParam) * 3);
+        fParams[2].fbRes = glm::vec2(swapChainExtent.width, swapChainExtent.height);
+        memcpy(uniformBuffersData[currentImage], fParams, sizeof(fParams));
     }
 
     void createSyncObjects() {

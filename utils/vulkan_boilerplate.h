@@ -45,7 +45,8 @@ VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags a
 
 VkFormat findDepthFormat();
 
-void createRenderPass(VkRenderPass &renderPass, VkFormat swapChainImageFormat);
+void createRenderPass(VkRenderPass &renderPass, VkFormat swapChainImageFormat, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp depthStoreOp,
+                      VkImageLayout depthLayoutInit, VkImageLayout depthLayoutFinal);
 
 void createDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout,
         std::vector<VkDescriptorType> descriptorTypes, std::vector<VkShaderStageFlags> shaderStageFlags);
@@ -56,7 +57,8 @@ VkShaderModule createShaderModule(const std::vector<char>& code);
 void createGraphicsPipeline(VkPipelineLayout &pipelineLayout, VkPipeline &graphicsPipeline, VkDescriptorSetLayout &descSetLayout,
         VkRenderPass renderPass, VkExtent2D swapChainExtent,
         VkPrimitiveTopology topology, const char* shaderName,
-        uint32_t vertInStride, std::vector<uint32_t> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat);
+        uint32_t vertInStride, std::vector<uint32_t> vertInAttrOffset, std::vector<VkFormat> vertInAttrFormat,
+        bool depthWrite);
 
 void createComputePipeline(VkPipelineLayout &pipelineLayout, VkPipeline &computePipeline, VkDescriptorSetLayout descSetLayout);
 
@@ -68,8 +70,3 @@ void createFramebuffers(VkRenderPass renderPass, std::vector<VkFramebuffer> &swa
 void createSampler(VkSampler &sampler);
 
 void createDescriptorPool(VkDescriptorPool &descriptorPool, int maxSets, std::vector<VkDescriptorPoolSize> poolSizes);
-
-void createDescriptorSets(VkDescriptorPool descriptorPool, uint32_t descSetCount, uint32_t swapchainCount,
-        VkDescriptorSetLayout gDescSetLayout, std::vector<VkDescriptorSet> &renderDescSets,
-        std::vector<VkBuffer> &uniformBuffers, int uniformBufferSize, const std::vector<VkImageView> &imageViews,
-        const std::vector<VkSampler> &samplers, WaterGrid waterGrid);

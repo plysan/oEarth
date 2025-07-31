@@ -16,12 +16,10 @@ layout(location = 5) out vec3 lat_n_cs;
 layout(location = 6) out vec3 lng_n_cs;
 layout(location = 7) out vec3 vertex_pos_n_cs;
 layout(location = 8) out float cam_vertex_length;
-layout(location = 9) out vec3 cam_param;
 layout(location = 10) out vec2 waterOffsetCoord;
 layout(location = 11) out float bathy;
 
-layout(binding = 3) uniform sampler2D compImg;
-layout(binding = 4) uniform sampler2D compNorImg;
+layout(binding = 4) uniform sampler2D compImg;
 layout(binding = 5) uniform sampler2D bathymetry;
 
 float atmosphere_radius_square = atmosphereTopRadius * atmosphereTopRadius;
@@ -29,12 +27,11 @@ float scatter_height = (length((ubo.view * vec4(-ubo.word_offset, 1.0)).xyz) - e
 float green_pow_coefficient = 1 / pow(greenAvgWlength/redAvgWlength, 4);
 float blue_pow_coefficient = 1 / pow(blueAvgWlength/redAvgWlength, 4);
 //TODO
-vec3 sun_ws = vec3(20000.0, 0.0, 0.0);
+vec3 sun_ws = sunDirW * 20000;
 
 float dPixZenith = 0.0010908305661643995; // sin(yFov/yRes)
 float wave_h_domain = 1.0 / 10;
 float wave_v0 = 0.00000003;
-const float meterToRad = 1.0 / earthRadiusM;
 
 //#define DBG_STATIC
 float waveHGen(vec2 freqCoord) {
@@ -87,12 +84,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
     float lat_dist = dot(lat_n_cs, dir_coord);
     float lng_dist = dot(lng_n_cs, dir_coord);
 
-    float cos_zenith = dot(down_n_cs, normalize(vertex_pos_cs));
-    float pix_span = cam_vertex_length * dPixZenith / cos_zenith;
     const float worldToFreqCoe = pi2 / waveDomainSize;
-    float dLat = pix_span * dot(lat_n_cs, normalize(dir_coord)) * worldToFreqCoe;
-    float dLng = pix_span * dot(lng_n_cs, normalize(dir_coord)) * worldToFreqCoe;
-    cam_param = vec3(dLat, dLng, pix_span);
 
     float wave_size_v = wave_v0;
     if (cam_vertex_length / wave_size_v > 200) {
@@ -110,7 +102,7 @@ void handle_water(inout vec3 vertex_pos_cs) {
     } else {
         compH = waveHGen(fragTexCoord);
     }
-    float water_height = compH * meterToRad;
+    float water_height = compH / earthRadiusM;
     gl_Position = ubo.proj * vec4(((ubo.view * vec4(surface_pos_ms, 1)).xyz + world_offset_n_cs * water_height), 1);
 }
 
@@ -119,8 +111,9 @@ void main() {
     vec3 world_offset_cs = (ubo.view * vec4(-ubo.word_offset,1)).xyz; // from cam
     world_offset_n_cs = normalize(-world_offset_cs);
     vec3 vertex_pos_cs;
-    if (ubo.target == TARGET_WATER) {
+    if (ubo.target == TARGET_SWE) {
         handle_water(vertex_pos_cs);
+        return;
     } else {
         gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
         vertex_pos_cs = (ubo.view * ubo.model * vec4(inPosition,1)).xyz;

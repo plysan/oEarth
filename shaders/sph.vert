@@ -18,5 +18,5 @@ void main() {
     vec3 cam_pos = (ubo.v_inv * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     vec3 pos = cam_pos - dot(cam_pos, down_n) * down_n + (coord.x * lat_n + coord.y * lng_n) * ubo.waterRadius + (ubo.model[0].z - inPos.z / earthRadiusM) * down_n;
     gl_Position = ubo.proj * ubo.view * vec4(pos, 1.0);
-    gl_PointSize = atan(pow(inPos.w, 1.0/3) / earthRadiusM / length(pos - cam_pos)) / (FOV_RANGE / 180) * HEIGHT / 4;
+    gl_PointSize = atan(pow(inPos.w, 1.0/3) / earthRadiusM / length(pos - cam_pos)) / (FOV_RANGE / 180) * HEIGHT;
 }

@@ -1,5 +1,7 @@
 #include "common.h"
 
+vec3 sunDirW = normalize(vec3(1, 0, 0));
+
 layout(std140, binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
@@ -12,6 +14,7 @@ layout(std140, binding = 0) uniform UniformBufferObject {
     vec2 waterOffset;
     vec2 bathyUvMid;
     vec2 bathyRadius;
+    vec2 fbRes;
     float waterRadius;
     float waterRadiusM;
     float height;

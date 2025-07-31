@@ -27,7 +27,7 @@ void Camera::update(GLFWwindow* window, glm::dvec2 winCenter) {
     glfwSetCursorPos(window, winCenter.x, winCenter.y);
     dir = glm::normalize(glm::rotate(dir, rDir.y, tmpAxis));
     float height = glm::length(pos) - earthRadius;
-    proj = glm::perspective(glm::radians(fov), aspect, glm::max(0.0000001f, height / 1000), 1.5f);
+    proj = glm::perspective(glm::radians(fov), aspect, glm::max(zNear, height / 1000), zFar);
     proj[1][1] *= -1;
 
     glm::vec3 right = glm::cross(dir, up);
@@ -102,7 +102,7 @@ struct InvParam {
 static InvParam inv_map[RES_H][RES_RAD][RES_FOV];
 
 float getInvDeltaH(float h) {
-    return glm::max(0.00000f, h);
+    return glm::max(0.00001f, h);
 }
 
 InvParam getInvParam(float height, float rad_down_dir, float fov) {
@@ -182,7 +182,7 @@ void Camera::getPVInv(float &h_inv, glm::mat4 &p_inv, glm::mat4 &v_inv, glm::dve
     glm::vec3 pos_cam_inv = pos_cam + up * getInvDeltaH(height);
     glm::vec axi = glm::cross(up, dir);
     glm::vec3 dir_inv = glm::rotate(-up, -inv_param.rad_down_di, axi);
-    p_inv = glm::inverse(glm::perspective((float)inv_param.rad_fov_inv, aspect * 1.07f, glm::max(0.000001f, h_inv / 100), 2.0f));
+    p_inv = glm::inverse(glm::perspective((float)inv_param.rad_fov_inv, aspect * 1.07f, glm::max(zNear, h_inv / 100), zFar));
     v_inv = glm::inverse(glm::lookAt(pos_cam_inv, pos_cam_inv + dir_inv, up));
 }
 
